@@ -11,6 +11,7 @@ on:
           - host24-frontend
           - host24-backend
           - AWS_Staging
+          - DESKTOP-Q4SDOI5
 
       domain:
         description: "Enter the target domain (e.g., qa.arborgold.net)"
