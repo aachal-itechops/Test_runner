@@ -51,11 +51,10 @@ permissions:
 
 jobs:
   deploy:
+      runs-on: [self-hosted, DESKTOP-Q4SDOI5, Windows]
    # runs-on: ${{ fromJson('{"host24-backend":["self-hosted","Windows","X64","host24","backend"],"host24-frontend":["self-hosted","Windows","X64","host24","frontend"],"host24-zip":["self-hosted","Windows","X64","host24","zip"],"AWS_Staging":["self-hosted","Windows","X64","AWS_Staging"],"AWS_PROD_01":["self-hosted","Windows","X64","AWS_PROD_01"],"AWS_PROD_02":["self-hosted","Windows","X64","AWS_PROD_02"],"AWS_PROD_03":["self-hosted","Windows","X64","AWS_PROD_03"],"AWS_PROD_04":["self-hosted","Windows","X64","AWS_PROD_04"],"AWS_PROD_05":["self-hosted","Windows","X64","AWS_PROD_05"]}')[github.event.inputs.host] }}
-   runs-on: DESKTOP-Q4SDOI5
-
-    
-    steps:
+      
+      steps:
 
       - name: "📥 Checkout Repository"
         uses: actions/checkout@v4
