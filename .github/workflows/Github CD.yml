@@ -17,6 +17,7 @@ on:
           - AWS_PROD_03
           - AWS_PROD_04
           - AWS_PROD_05
+          - DESKTOP-Q4SDOI5
 
       domain:
         description: "Comma-separated domain(s). Required."
@@ -49,17 +50,11 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ${{ fromJson('{
-      "host24-backend":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","host24","backend"],
-      "host24-frontend":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","host24","frontend"],
-      "host24-zip":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","host24","zip"],
-      "AWS_Staging":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","AWS_Staging"],
-      "AWS_PROD_01":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","AWS_PROD_01"],
-      "AWS_PROD_02":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","AWS_PROD_02"],
-      "AWS_PROD_03":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","AWS_PROD_03"],
-      "AWS_PROD_04":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","AWS_PROD_04"],
-      "AWS_PROD_05":["self-hosted","Windows","X64","DESKTOP-Q4SDOI5","AWS_PROD_05"]
-      }')[github.event.inputs.host] }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - DESKTOP-Q4SDOI5
 
     steps:
 
