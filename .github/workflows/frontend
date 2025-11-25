@@ -42,7 +42,7 @@ permissions:
 jobs:
   deploy:
     # runs-on: ${{ fromJson('{"host24-frontend":["self-hosted","frontend"],"host24-backend":["self-hosted","backend"],"AWS_Staging":["self-hosted","AWS_Staging"]}')[github.event.inputs.runner] }}
-      runs-on: ARB
+      runs-on: [self-hosted, Windows, X64]
 
 
     steps:
