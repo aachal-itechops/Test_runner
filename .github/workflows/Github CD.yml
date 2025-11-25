@@ -17,7 +17,7 @@ on:
           - AWS_PROD_03
           - AWS_PROD_04
           - AWS_PROD_05
-          - DESKTOP-Q4SDOI5
+          - aachal_behl
 
       domain:
         description: "Comma-separated domain(s). Required."
@@ -54,7 +54,7 @@ jobs:
       - self-hosted
       - Windows
       - X64
-      - DESKTOP-Q4SDOI5
+      - aachal_behl
 
     steps:
 
