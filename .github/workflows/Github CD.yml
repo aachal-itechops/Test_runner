@@ -85,8 +85,8 @@ jobs:
       - name: "🧾 Download ZIP Assets from GitHub Release"
         id: download
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        #env:
+          #GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag="${{ github.event.inputs.release_tag }}"
           Write-Host "📥 Downloading Release ZIPs for $tag..."
