@@ -51,12 +51,7 @@ permissions:
 
 jobs:
   deploy:
-    runs-on:
-      - self-hosted
-      - Windows
-      - X64
-      - aachal_behl
-      - ARB
+    runs-on: [self-hosted, ARB]
 
     steps:
 
