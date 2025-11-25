@@ -12,6 +12,7 @@ on:
           - host24-backend
           - AWS_Staging
           - DESKTOP-Q4SDOI5
+          - ARB
 
       domain:
         description: "Enter the target domain (e.g., qa.arborgold.net)"
@@ -41,7 +42,7 @@ permissions:
 jobs:
   deploy:
     # runs-on: ${{ fromJson('{"host24-frontend":["self-hosted","frontend"],"host24-backend":["self-hosted","backend"],"AWS_Staging":["self-hosted","AWS_Staging"]}')[github.event.inputs.runner] }}
-      runs-on: DESKTOP-Q4SDOI5
+      runs-on: ARB
 
 
     steps:
