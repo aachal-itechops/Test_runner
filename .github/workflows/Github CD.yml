@@ -28,9 +28,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: "📂 Prepare test frontend/backend folders"
+        id: prepare
         shell: pwsh
         run: |
-          # These are your manually created folders:
           $frontendSrc = "C:\deploy_test\frontend"
           $backendSrc  = "C:\deploy_test\backend"
 
@@ -51,13 +51,12 @@ jobs:
           $merged = "$root/merged"
           New-Item -ItemType Directory -Path $merged | Out-Null
 
-          # Create frontend/backend inside merge folder
           New-Item -ItemType Directory -Path "$merged/frontend" | Out-Null
           New-Item -ItemType Directory -Path "$merged/backend"  | Out-Null
 
-          # Copy your manual test files
-          Copy-Item "${{ steps.merge.outputs.frontend_src }}\*" "$merged/frontend" -Recurse -Force
-          Copy-Item "${{ steps.merge.outputs.backend_src }}\*"  "$merged/backend"  -Recurse -Force
+          # Correct + FAST copy
+          Copy-Item "${{ steps.prepare.outputs.frontend_src }}\*" "$merged/frontend" -Recurse -Force
+          Copy-Item "${{ steps.prepare.outputs.backend_src }}\*"  "$merged/backend"  -Recurse -Force
 
           echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
 
