@@ -16,10 +16,6 @@ on:
           - backend
           - both
 
-      release_tag:
-        description: "GitHub Release tag (optional for ZIP extraction)"
-        required: false
-
 permissions:
   contents: read
 
@@ -31,59 +27,38 @@ jobs:
       - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
-      - name: "⚙️ Prepare frontend/backend from ZIP or local folders"
-        id: prepare
-        shell: pwsh
-        run: |
-          $releaseTag = "${{ github.event.inputs.release_tag }}"
-          $root = "$PWD/deploy"
-          $frontendSrc = "$root/frontend"
-          $backendSrc  = "$root/backend"
-
-          # Clean old deploy folder
-          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
-          New-Item -ItemType Directory -Path $root | Out-Null
-
-          # Create frontend/backend folders
-          New-Item -ItemType Directory -Path $frontendSrc | Out-Null
-          New-Item -ItemType Directory -Path $backendSrc  | Out-Null
-
-          if (-not [string]::IsNullOrWhiteSpace($releaseTag)) {
-              Write-Host "📥 Downloading release $releaseTag..."
-              gh release download $releaseTag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
-
-              foreach ($zip in Get-ChildItem "$PWD/*.zip") {
-                  $tmp = Join-Path $root $zip.BaseName
-                  Expand-Archive $zip.FullName $tmp -Force
-
-                  if (Test-Path "$tmp/frontend") { Copy-Item "$tmp/frontend/*" $frontendSrc -Recurse -Force }
-                  if (Test-Path "$tmp/backend")  { Copy-Item "$tmp/backend/*"  $backendSrc  -Recurse -Force }
-              }
-          }
-          else {
-              # Use manually created local folders
-              $frontendSrc = "C:\deploy_test\frontend"
-              $backendSrc  = "C:\deploy_test\backend"
-          }
-
-          # Output for next steps
-          echo "frontend_src=$frontendSrc" >> $env:GITHUB_OUTPUT
-          echo "backend_src=$backendSrc" >> $env:GITHUB_OUTPUT
-
-      - name: "📦 Create Merge Folder"
+      - name: "📦 Prepare Merge Folder from ZIPs"
         id: merge
         shell: pwsh
         run: |
           $root = "$PWD/deploy"
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          New-Item -ItemType Directory -Path $root | Out-Null
+
           $merged = "$root/merged"
-          if (Test-Path $merged) { Remove-Item $merged -Recurse -Force }
           New-Item -ItemType Directory -Path $merged | Out-Null
 
-          New-Item -ItemType Directory -Path "$merged/frontend" | Out-Null
-          New-Item -ItemType Directory -Path "$merged/backend"  | Out-Null
+          $frontendMerged = "$merged/frontend"
+          $backendMerged  = "$merged/backend"
+          New-Item -ItemType Directory -Path $frontendMerged | Out-Null
+          New-Item -ItemType Directory -Path $backendMerged  | Out-Null
 
-          Copy-Item "${{ steps.prepare.outputs.frontend_src }}\*" "$merged/frontend" -Recurse -Force
-          Copy-Item "${{ steps.prepare.outputs.backend_src }}\*"  "$merged/backend"  -Recurse -Force
+          $frontendZip = "C:\deploy_test\frontend.zip"
+          $backendZip  = "C:\deploy_test\backend.zip"
+
+          if (Test-Path $frontendZip) {
+              Write-Host "📦 Extracting frontend ZIP..."
+              Expand-Archive $frontendZip -DestinationPath $frontendMerged -Force
+          } else {
+              Write-Warning "⚠️ Frontend ZIP not found!"
+          }
+
+          if (Test-Path $backendZip) {
+              Write-Host "📦 Extracting backend ZIP..."
+              Expand-Archive $backendZip -DestinationPath $backendMerged -Force
+          } else {
+              Write-Warning "⚠️ Backend ZIP not found!"
+          }
 
           echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
 
