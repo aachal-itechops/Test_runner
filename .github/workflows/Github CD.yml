@@ -1,11 +1,12 @@
-name: "🚚 Manual Backend/Frontend Deploy"
+name: "🚚 Manual Local Deploy Test"
 
 on:
   workflow_dispatch:
     inputs:
       domain:
-        description: "Comma-separated domain(s)"
+        description: "Comma-separated domains"
         required: false
+
       app_type:
         description: "Deployment Type"
         required: true
@@ -23,13 +24,25 @@ jobs:
     runs-on: [self-hosted]
 
     steps:
-
-      - name: "📥 Checkout Repository"
+      - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
-      - name: "📂 Prepare merge folder from manual frontend/backend"
+      - name: "📂 Prepare test frontend/backend folders"
+        id: prepare
         shell: pwsh
+        run: |
+          $frontendSrc = "C:\deploy_test\frontend"
+          $backendSrc  = "C:\deploy_test\backend"
+
+          if (-not (Test-Path $frontendSrc)) { Write-Error "❌ frontend folder missing"; exit 1 }
+          if (-not (Test-Path $backendSrc))  { Write-Error "❌ backend folder missing"; exit 1 }
+
+          echo "frontend_src=$frontendSrc" >> $env:GITHUB_OUTPUT
+          echo "backend_src=$backendSrc" >> $env:GITHUB_OUTPUT
+
+      - name: "📦 Create Merge Folder"
         id: merge
+        shell: pwsh
         run: |
           $root = "$PWD/deploy"
           if (Test-Path $root) { Remove-Item $root -Recurse -Force }
@@ -38,84 +51,49 @@ jobs:
           $merged = "$root/merged"
           New-Item -ItemType Directory -Path $merged | Out-Null
 
-          # Create frontend/backend inside merge folder
           New-Item -ItemType Directory -Path "$merged/frontend" | Out-Null
           New-Item -ItemType Directory -Path "$merged/backend"  | Out-Null
 
-          # Copy manual files from local folders
-          $frontendSrc = "C:\deploy_test\frontend"
-          $backendSrc  = "C:\deploy_test\backend"
-
-          if (-not (Test-Path $frontendSrc)) { Write-Error "❌ frontend folder missing"; exit 1 }
-          if (-not (Test-Path $backendSrc))  { Write-Error "❌ backend folder missing"; exit 1 }
-
-          Copy-Item "$frontendSrc\*" "$merged/frontend" -Recurse -Force
-          Copy-Item "$backendSrc\*"  "$merged/backend"  -Recurse -Force
+          # Correct + FAST copy
+          Copy-Item "${{ steps.prepare.outputs.frontend_src }}\*" "$merged/frontend" -Recurse -Force
+          Copy-Item "${{ steps.prepare.outputs.backend_src }}\*"  "$merged/backend"  -Recurse -Force
 
           echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy merged files (frontend/backend/both)"
+      - name: "🚀 Deploy merged files"
         shell: pwsh
         run: |
-          Import-Module WebAdministration
-
-          $source = "${{ steps.merge.outputs.merged_root }}"
-          $domains = "${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
-          $type = "${{ github.event.inputs.app_type }}"
+          $source="${{ steps.merge.outputs.merged_root }}"
+          $domains="${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
+          $type="${{ github.event.inputs.app_type }}"
 
           foreach ($domain in $domains) {
+            Write-Host "➡ Deploying to $domain"
 
-              Write-Host "`n➡ Deploying to $domain"
+            $httpdocs    = "D:\inetpub\vhosts\$domain\httpdocs"
+            $httpdocsAG  = "D:\inetpub\vhosts\$domain\httpdocs\AG"
 
-              $httpdocs   = "D:\inetpub\vhosts\$domain\httpdocs"
-              $httpdocsAG = "D:\inetpub\vhosts\$domain\httpdocs\AG"
-
-              # Build targets array like old pipeline
-              $targets = @()
-
-              switch ($type) {
-                  "frontend" {
-                      $targets += @{
-                          Source      = Join-Path $source "frontend"
-                          Destination = $httpdocs
-                      }
-                  }
-                  "backend" {
-                      $targets += @{
-                          Source      = Join-Path $source "backend"
-                          Destination = $httpdocsAG
-                      }
-                  }
-                  "both" {
-                      $targets += @{
-                          Source      = Join-Path $source "frontend"
-                          Destination = $httpdocs
-                      }
-                      $targets += @{
-                          Source      = Join-Path $source "backend"
-                          Destination = $httpdocsAG
-                      }
-                  }
+            switch ($type) {
+              "frontend" {
+                if (!(Test-Path $httpdocs)) { New-Item $httpdocs -ItemType Directory -Force | Out-Null }
+                Copy-Item "$source/frontend/*" $httpdocs -Recurse -Force
               }
-
-              # Deploy each target
-              foreach ($t in $targets) {
-                  $src = $t.Source
-                  $dst = $t.Destination
-
-                  Write-Host "📂 Copying from: $src → $dst"
-
-                  if (!(Test-Path $dst)) {
-                      New-Item -ItemType Directory -Force -Path $dst | Out-Null
-                  }
-
-                  Copy-Item "$src\*" $dst -Recurse -Force
+              "backend" {
+                if (!(Test-Path $httpdocsAG)) { New-Item $httpdocsAG -ItemType Directory -Force | Out-Null }
+                Copy-Item "$source/backend/*" $httpdocsAG -Recurse -Force
               }
+              "both" {
+                if (!(Test-Path $httpdocs))   { New-Item $httpdocs -ItemType Directory -Force | Out-Null }
+                if (!(Test-Path $httpdocsAG)) { New-Item $httpdocsAG -ItemType Directory -Force | Out-Null }
+
+                Copy-Item "$source/frontend/*" $httpdocs   -Recurse -Force
+                Copy-Item "$source/backend/*"  $httpdocsAG -Recurse -Force
+              }
+            }
           }
 
-      - name: "🧹 Cleanup workspace"
+      - name: "🧹 Cleanup"
         if: always()
         shell: pwsh
         run: |
           Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host "🧹 Cleanup completed."
