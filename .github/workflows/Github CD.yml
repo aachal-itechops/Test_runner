@@ -1,4 +1,4 @@
-name: "🚚 Manual Local Deploy Test (Fast)"
+name: "🚚 Manual Local Deploy Test"
 
 on:
   workflow_dispatch:
@@ -54,13 +54,12 @@ jobs:
           New-Item -ItemType Directory -Path "$merged/frontend" | Out-Null
           New-Item -ItemType Directory -Path "$merged/backend"  | Out-Null
 
-          # Copy manual test files
           Copy-Item "${{ steps.prepare.outputs.frontend_src }}\*" "$merged/frontend" -Recurse -Force
           Copy-Item "${{ steps.prepare.outputs.backend_src }}\*"  "$merged/backend"  -Recurse -Force
 
           echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy merged files"
+      - name: "🚀 Deploy merged files using targets"
         shell: pwsh
         run: |
           $source="${{ steps.merge.outputs.merged_root }}"
@@ -68,33 +67,29 @@ jobs:
           $type="${{ github.event.inputs.app_type }}"
 
           foreach ($domain in $domains) {
-              Write-Host "➡ Deploying to $domain"
+            Write-Host "➡ Deploying to $domain"
 
-              $targets=@()
-
-              switch ($type) {
-                  "frontend" { 
-                      $targets+= @{ Source = Join-Path $source "frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" } 
-                  }
-                  "backend"  { 
-                      $targets+= @{ Source = Join-Path $source "backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" } 
-                  }
-                  "both"     {
-                      $targets+= @{ Source = Join-Path $source "frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
-                      $targets+= @{ Source = Join-Path $source "backend";  Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
-                  }
+            $targets = @()
+            switch ($type) {
+              "frontend" { 
+                $targets += @{ Source = "$source\frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
               }
-
-              foreach ($target in $targets) {
-                  Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
-
-                  if (-not (Test-Path $target.Destination)) { 
-                      New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null 
-                  }
-
-                  # FAST copy using robocopy
-                  robocopy $target.Source $target.Destination /MIR /NFL /NDL /NJH /NJS /nc /ns /np
+              "backend" { 
+                $targets += @{ Source = "$source\backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
               }
+              "both" {
+                $targets += @{ Source = "$source\frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
+                $targets += @{ Source = "$source\backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
+              }
+            }
+
+            foreach ($target in $targets) {
+              Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
+              if (-not (Test-Path $target.Destination)) {
+                New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null
+              }
+              Copy-Item "$($target.Source)\*" $target.Destination -Recurse -Force
+            }
           }
 
       - name: "🧹 Cleanup"
