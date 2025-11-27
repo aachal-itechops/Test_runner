@@ -1,49 +1,20 @@
-name: "🚚 Manual Backend/Frontend Deploy"
+name: "🚚 Manual Local Deploy Test"
 
 on:
   workflow_dispatch:
     inputs:
-      host:
-        description: "Select target host / runner"
-        required: true
-        type: choice
-        options:
-          - host24-backend
-          - host24-frontend
-          - host24-zip
-          - AWS_Staging
-          - AWS_PROD_01
-          - AWS_PROD_02
-          - AWS_PROD_03
-          - AWS_PROD_04
-          - AWS_PROD_05
-          - test_runner
-
       domain:
-        description: "Comma-separated domain(s)."
-        required: false
-
-      exclude_domains:
-        description: "Comma-separated domains to exclude manually"
-        required: false
-
-      restart_iis:
-        description: "Restart IIS before & after Deployment?"
-        required: false
-        type: boolean
+        description: "Comma-separated domains"
+        required: true
 
       app_type:
         description: "Deployment Type"
         required: true
         type: choice
         options:
-          - backend
           - frontend
+          - backend
           - both
-
-      release_tag:
-        description: "GitHub Release tag (optional for local test)"
-        required: false
 
 permissions:
   contents: read
@@ -53,94 +24,77 @@ jobs:
     runs-on: [self-hosted]
 
     steps:
-      - name: "📥 Checkout Repository"
+      - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
-      - name: "⚙️ Ensure GH CLI (for local test fallback)"
+      - name: "📂 Prepare test frontend/backend folders"
         shell: pwsh
         run: |
-          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            Write-Host "⚠️ GH CLI not found. Skipping release download for local test."
-          }
+          # These are your manually created folders:
+          $frontendSrc = "C:\deploy_test\frontend"
+          $backendSrc  = "C:\deploy_test\backend"
 
-      - name: "🧾 Download & Prepare ZIPs"
-        id: download
+          if (-not (Test-Path $frontendSrc)) { Write-Error "❌ frontend folder missing"; exit 1 }
+          if (-not (Test-Path $backendSrc))  { Write-Error "❌ backend folder missing"; exit 1 }
+
+          echo "frontend_src=$frontendSrc" >> $env:GITHUB_OUTPUT
+          echo "backend_src=$backendSrc" >> $env:GITHUB_OUTPUT
+
+      - name: "📦 Create Merge Folder"
+        id: merge
         shell: pwsh
         run: |
-          $tag="${{ github.event.inputs.release_tag }}"
-          $downloadDir="$PWD/release_zips"
-
-          # Create folder for testing locally
-          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
-            New-Item -ItemType Directory -Path $downloadDir | Out-Null
-
-            # Example dummy files
-            New-Item -ItemType Directory -Path "$downloadDir/frontend" | Out-Null
-            New-Item -ItemType File -Path "$downloadDir/frontend/index.html" | Out-Null
-            New-Item -ItemType Directory -Path "$downloadDir/backend" | Out-Null
-            New-Item -ItemType File -Path "$downloadDir/backend/api.dll" | Out-Null
-          } else {
-            gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
-            if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
-            New-Item -ItemType Directory -Path $downloadDir | Out-Null
-            Move-Item *.zip $downloadDir -Force
-          }
-
-          echo "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
-
-      - name: "📦 Extract & Merge ZIPs"
-        id: extract
-        shell: pwsh
-        run: |
-          $src="${{ steps.download.outputs.download_dir }}"
-          $root="$PWD/deploy"
-          if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+          $root = "$PWD/deploy"
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
           New-Item -ItemType Directory -Path $root | Out-Null
 
-          $merged="$root/merged"
+          $merged = "$root/merged"
           New-Item -ItemType Directory -Path $merged | Out-Null
 
-          foreach ($item in Get-ChildItem $src) {
-            Copy-Item $item.FullName $merged -Recurse -Force
-          }
+          # Create frontend/backend inside merge folder
+          New-Item -ItemType Directory -Path "$merged/frontend" | Out-Null
+          New-Item -ItemType Directory -Path "$merged/backend"  | Out-Null
 
-          echo "extract_root=$merged" >> $env:GITHUB_OUTPUT
+          # Copy your manual test files
+          Copy-Item "${{ steps.merge.outputs.frontend_src }}\*" "$merged/frontend" -Recurse -Force
+          Copy-Item "${{ steps.merge.outputs.backend_src }}\*"  "$merged/backend"  -Recurse -Force
 
-      - name: "🚀 Deploy to Domains"
+          echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
+
+      - name: "🚀 Deploy merged files"
         shell: pwsh
         run: |
-          $source="${{ steps.extract.outputs.extract_root }}"
-          $domains=(${{ github.event.inputs.domain }} -split ",") | ForEach-Object { $_.Trim() }
-          $exclude=(${{ github.event.inputs.exclude_domains }} -split ",") | ForEach-Object { $_.Trim() }
-          $restart="${{ github.event.inputs.restart_iis }}"
+          $source="${{ steps.merge.outputs.merged_root }}"
+          $domains="${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
           $type="${{ github.event.inputs.app_type }}"
 
-          if ($domains.Count -eq 0) { Write-Host "⚠️ No domains to deploy"; exit 0 }
-          $domains=$domains | Where-Object { $exclude -notcontains $_ }
-
           foreach ($domain in $domains) {
-              $targets=@()
-              switch ($type) {
-                  "frontend" { $targets+= @{ Source = Join-Path $source "frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" } }
-                  "backend"  { $targets+= @{ Source = Join-Path $source "backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" } }
-                  "both" {
-                      $targets+= @{ Source = Join-Path $source "frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
-                      $targets+= @{ Source = Join-Path $source "backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
-                  }
-              }
+            Write-Host "➡ Deploying to $domain"
 
-              foreach ($target in $targets) {
-                  Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
-                  if (-not (Test-Path $target.Destination)) { New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null }
-                  Copy-Item "$($target.Source)\*" $target.Destination -Recurse -Force
+            $httpdocs    = "D:\inetpub\vhosts\$domain\httpdocs"
+            $httpdocsAG  = "D:\inetpub\vhosts\$domain\httpdocs\AG"
+
+            switch ($type) {
+              "frontend" {
+                if (!(Test-Path $httpdocs)) { New-Item $httpdocs -ItemType Directory -Force | Out-Null }
+                Copy-Item "$source/frontend/*" $httpdocs -Recurse -Force
               }
+              "backend" {
+                if (!(Test-Path $httpdocsAG)) { New-Item $httpdocsAG -ItemType Directory -Force | Out-Null }
+                Copy-Item "$source/backend/*" $httpdocsAG -Recurse -Force
+              }
+              "both" {
+                if (!(Test-Path $httpdocs))   { New-Item $httpdocs -ItemType Directory -Force | Out-Null }
+                if (!(Test-Path $httpdocsAG)) { New-Item $httpdocsAG -ItemType Directory -Force | Out-Null }
+
+                Copy-Item "$source/frontend/*" $httpdocs   -Recurse -Force
+                Copy-Item "$source/backend/*"  $httpdocsAG -Recurse -Force
+              }
+            }
           }
 
-      - name: "🧹 Cleanup workspace"
+      - name: "🧹 Cleanup"
         if: always()
         shell: pwsh
         run: |
-          Remove-Item "$PWD/release_zips" -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host "🧹 Cleanup done"
