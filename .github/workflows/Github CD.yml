@@ -27,10 +27,10 @@ jobs:
       - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
-      - name: "📂 Prepare test frontend/backend folders"
-        id: prepare
+      - name: "📂 Prepare manual frontend/backend folders"
         shell: pwsh
         run: |
+          # These are your manually created folders:
           $frontendSrc = "C:\deploy_test\frontend"
           $backendSrc  = "C:\deploy_test\backend"
 
@@ -48,19 +48,20 @@ jobs:
           if (Test-Path $root) { Remove-Item $root -Recurse -Force }
           New-Item -ItemType Directory -Path $root | Out-Null
 
-          $merged = "$root/merged"
+          $merged = Join-Path $root "merged"
           New-Item -ItemType Directory -Path $merged | Out-Null
 
-          New-Item -ItemType Directory -Path "$merged/frontend" | Out-Null
-          New-Item -ItemType Directory -Path "$merged/backend"  | Out-Null
+          # Create frontend/backend inside merge folder
+          New-Item -ItemType Directory -Path (Join-Path $merged "frontend") | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $merged "backend")  | Out-Null
 
-          # Correct + FAST copy
-          Copy-Item "${{ steps.prepare.outputs.frontend_src }}\*" "$merged/frontend" -Recurse -Force
-          Copy-Item "${{ steps.prepare.outputs.backend_src }}\*"  "$merged/backend"  -Recurse -Force
+          # Copy your manual test files into merge folder
+          Copy-Item "${{ steps.merge.outputs.frontend_src }}\*" (Join-Path $merged "frontend") -Recurse -Force
+          Copy-Item "${{ steps.merge.outputs.backend_src }}\*"  (Join-Path $merged "backend")  -Recurse -Force
 
           echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy merged files"
+      - name: "🚀 Deploy merged files using targets"
         shell: pwsh
         run: |
           $source="${{ steps.merge.outputs.merged_root }}"
@@ -68,32 +69,39 @@ jobs:
           $type="${{ github.event.inputs.app_type }}"
 
           foreach ($domain in $domains) {
-            Write-Host "➡ Deploying to $domain"
+              Write-Host "➡ Deploying to $domain"
 
-            $httpdocs    = "D:\inetpub\vhosts\$domain\httpdocs"
-            $httpdocsAG  = "D:\inetpub\vhosts\$domain\httpdocs\AG"
+              # Initialize targets array
+              $targets=@()
 
-            switch ($type) {
-              "frontend" {
-                if (!(Test-Path $httpdocs)) { New-Item $httpdocs -ItemType Directory -Force | Out-Null }
-                Copy-Item "$source/frontend/*" $httpdocs -Recurse -Force
+              switch ($type) {
+                  "frontend" {
+                      $targets += @{ Source = Join-Path $source "frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
+                  }
+                  "backend" {
+                      $targets += @{ Source = Join-Path $source "backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
+                  }
+                  "both" {
+                      $targets += @{ Source = Join-Path $source "frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
+                      $targets += @{ Source = Join-Path $source "backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
+                  }
               }
-              "backend" {
-                if (!(Test-Path $httpdocsAG)) { New-Item $httpdocsAG -ItemType Directory -Force | Out-Null }
-                Copy-Item "$source/backend/*" $httpdocsAG -Recurse -Force
-              }
-              "both" {
-                if (!(Test-Path $httpdocs))   { New-Item $httpdocs -ItemType Directory -Force | Out-Null }
-                if (!(Test-Path $httpdocsAG)) { New-Item $httpdocsAG -ItemType Directory -Force | Out-Null }
 
-                Copy-Item "$source/frontend/*" $httpdocs   -Recurse -Force
-                Copy-Item "$source/backend/*"  $httpdocsAG -Recurse -Force
+              foreach ($target in $targets) {
+                  Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
+                  if (-not (Test-Path $target.Destination)) {
+                      New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null
+                  }
+
+                  Write-Host "🚚 Copying..."
+                  Copy-Item "$($target.Source)\*" $target.Destination -Recurse -Force
               }
-            }
           }
 
-      - name: "🧹 Cleanup"
+      - name: "🧹 Cleanup workspace"
         if: always()
         shell: pwsh
         run: |
           Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "🧹 Cleanup completed."
+
