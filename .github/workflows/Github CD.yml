@@ -5,7 +5,7 @@ on:
     inputs:
       domain:
         description: "Comma-separated domains"
-        required: true
+        required: false
 
       app_type:
         description: "Deployment Type"
