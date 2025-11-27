@@ -1,4 +1,4 @@
-name: "🚚 Manual Local/Release Deploy Test"
+name: "🚚 Manual Local Deploy Test"
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
           - both
 
       release_tag:
-        description: "GitHub Release tag (optional)"
+        description: "GitHub Release tag (optional for ZIP extraction)"
         required: false
 
 permissions:
@@ -31,41 +31,42 @@ jobs:
       - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
-      - name: "⚙️ Prepare frontend/backend"
+      - name: "⚙️ Prepare frontend/backend from ZIP or local folders"
         id: prepare
         shell: pwsh
         run: |
-          if (${{ github.event.inputs.release_tag }}) {
-              $downloadDir = "$PWD/release_zips"
-              if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
-              New-Item -ItemType Directory -Path $downloadDir | Out-Null
+          $releaseTag = "${{ github.event.inputs.release_tag }}"
+          $root = "$PWD/deploy"
+          $frontendSrc = "$root/frontend"
+          $backendSrc  = "$root/backend"
 
-              Write-Host "📥 Downloading release $(${{ github.event.inputs.release_tag }})"
-              gh release download ${{ github.event.inputs.release_tag }} --repo ${{ github.repository }} --pattern "*.zip" --clobber
-              Move-Item *.zip $downloadDir -Force
+          # Clean old deploy folder
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          New-Item -ItemType Directory -Path $root | Out-Null
 
-              $frontendSrc = "$PWD/deploy/frontend"
-              $backendSrc  = "$PWD/deploy/backend"
+          # Create frontend/backend folders
+          New-Item -ItemType Directory -Path $frontendSrc | Out-Null
+          New-Item -ItemType Directory -Path $backendSrc  | Out-Null
 
-              if (Test-Path "$PWD/deploy") { Remove-Item "$PWD/deploy" -Recurse -Force }
-              New-Item -ItemType Directory -Path "$PWD/deploy" | Out-Null
+          if (-not [string]::IsNullOrWhiteSpace($releaseTag)) {
+              Write-Host "📥 Downloading release $releaseTag..."
+              gh release download $releaseTag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
 
-              foreach ($zip in Get-ChildItem $downloadDir "*.zip") {
-                  $tmp = "$PWD/deploy/$($zip.BaseName)"
+              foreach ($zip in Get-ChildItem "$PWD/*.zip") {
+                  $tmp = Join-Path $root $zip.BaseName
                   Expand-Archive $zip.FullName $tmp -Force
-                  # Move frontend/backend into separate folders
+
                   if (Test-Path "$tmp/frontend") { Copy-Item "$tmp/frontend/*" $frontendSrc -Recurse -Force }
-                  if (Test-Path "$tmp/backend")  { Copy-Item "$tmp/backend/*"  $backendSrc -Recurse -Force }
+                  if (Test-Path "$tmp/backend")  { Copy-Item "$tmp/backend/*"  $backendSrc  -Recurse -Force }
               }
-          } else {
-              # Local manual folders
+          }
+          else {
+              # Use manually created local folders
               $frontendSrc = "C:\deploy_test\frontend"
               $backendSrc  = "C:\deploy_test\backend"
           }
 
-          if (-not (Test-Path $frontendSrc)) { Write-Error "❌ frontend folder missing"; exit 1 }
-          if (-not (Test-Path $backendSrc))  { Write-Error "❌ backend folder missing"; exit 1 }
-
+          # Output for next steps
           echo "frontend_src=$frontendSrc" >> $env:GITHUB_OUTPUT
           echo "backend_src=$backendSrc" >> $env:GITHUB_OUTPUT
 
@@ -73,19 +74,20 @@ jobs:
         id: merge
         shell: pwsh
         run: |
-          $root = "$PWD/deploy/merged"
-          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
-          New-Item -ItemType Directory -Path $root | Out-Null
+          $root = "$PWD/deploy"
+          $merged = "$root/merged"
+          if (Test-Path $merged) { Remove-Item $merged -Recurse -Force }
+          New-Item -ItemType Directory -Path $merged | Out-Null
 
-          New-Item -ItemType Directory -Path "$root/frontend" | Out-Null
-          New-Item -ItemType Directory -Path "$root/backend" | Out-Null
+          New-Item -ItemType Directory -Path "$merged/frontend" | Out-Null
+          New-Item -ItemType Directory -Path "$merged/backend"  | Out-Null
 
-          Copy-Item "${{ steps.prepare.outputs.frontend_src }}\*" "$root/frontend" -Recurse -Force
-          Copy-Item "${{ steps.prepare.outputs.backend_src }}\*" "$root/backend" -Recurse -Force
+          Copy-Item "${{ steps.prepare.outputs.frontend_src }}\*" "$merged/frontend" -Recurse -Force
+          Copy-Item "${{ steps.prepare.outputs.backend_src }}\*"  "$merged/backend"  -Recurse -Force
 
-          echo "merged_root=$root" >> $env:GITHUB_OUTPUT
+          echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy using targets"
+      - name: "🚀 Deploy merged files using targets"
         shell: pwsh
         run: |
           $source="${{ steps.merge.outputs.merged_root }}"
@@ -97,18 +99,22 @@ jobs:
 
             $targets = @()
             switch ($type) {
-              "frontend" { $targets += @{ Source = "$source\frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" } }
-              "backend"  { $targets += @{ Source = "$source\backend";  Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" } }
-              "both"     { 
-                  $targets += @{ Source = "$source\frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
-                  $targets += @{ Source = "$source\backend";  Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
+              "frontend" { 
+                $targets += @{ Source = "$source\frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
+              }
+              "backend" { 
+                $targets += @{ Source = "$source\backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
+              }
+              "both" {
+                $targets += @{ Source = "$source\frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
+                $targets += @{ Source = "$source\backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
               }
             }
 
             foreach ($target in $targets) {
               Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
               if (-not (Test-Path $target.Destination)) {
-                  New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null
+                New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null
               }
               Copy-Item "$($target.Source)\*" $target.Destination -Recurse -Force
             }
@@ -119,4 +125,3 @@ jobs:
         shell: pwsh
         run: |
           Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item "$PWD/release_zips" -Recurse -Force -ErrorAction SilentlyContinue
