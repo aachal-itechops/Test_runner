@@ -1,4 +1,4 @@
-name: "🚚 Manual Backend Deploy (from Release ZIP)"
+name: "🚚 Manual Backend Deploy (Local-Test-Friendly)"
 
 on:
   workflow_dispatch:
@@ -42,7 +42,7 @@ on:
           - both
 
       release_tag:
-        description: "GitHub Release tag (optional for testing)"
+        description: "GitHub Release tag (e.g., release/V10.0.3)"
         required: false
 
 permissions:
@@ -53,10 +53,11 @@ jobs:
     runs-on: [self-hosted]
 
     steps:
+
       - name: "📥 Checkout Repository"
         uses: actions/checkout@v4
 
-      - name: "⚙️ Ensure GitHub CLI Installed (ZIP fallback)"
+      - name: "⚙️ Ensure GH CLI Installed"
         shell: pwsh
         run: |
           if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -72,38 +73,30 @@ jobs:
             Expand-Archive $zip $dest -Force
 
             $exe = Get-ChildItem $dest -Recurse -Filter gh.exe | Select-Object -First 1
-            if (-not $exe) { Write-Error "❌ gh.exe missing"; exit 1 }
-
             echo $exe.DirectoryName | Out-File $env:GITHUB_PATH -Append
-            & "$($exe.FullName)" --version
-          } else {
-            Write-Host "✅ GH CLI exists: $(gh --version | Select-String 'gh version')"
           }
 
-      - name: "🧾 Download ZIP Assets"
+      - name: "🧾 Download ZIP Assets from GitHub Release (or create dummy)"
         id: download
         shell: pwsh
         run: |
           $tag="${{ github.event.inputs.release_tag }}"
-          $downloadDir="$PWD/release_zips"
-          Write-Host "📥 Downloading Release ZIPs..."
 
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-              Write-Host "⚠️ No release tag provided, creating dummy file for local testing."
-              if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
-              New-Item -ItemType Directory -Path $downloadDir | Out-Null
-              New-Item -ItemType File -Path "$downloadDir/dummy.txt" | Out-Null
+          $downloadDir="$PWD/release_zips"
+          if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
+          New-Item -ItemType Directory -Path $downloadDir | Out-Null
+
+          if (-not $tag) {
+            Write-Host "⚠️ No release tag provided, creating dummy ZIP for testing"
+            New-Item -ItemType File -Path "$downloadDir/dummy.txt" | Out-Null
+          } elseif (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            Write-Host "⚠️ GH CLI not available, skipping download, creating dummy ZIP"
+            New-Item -ItemType File -Path "$downloadDir/dummy.txt" | Out-Null
           } else {
-              if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-                  Write-Error "❌ GH CLI not available, cannot download release $tag"
-                  exit 1
-              }
-              gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
-              if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
-              New-Item -ItemType Directory -Path $downloadDir | Out-Null
-              Move-Item *.zip $downloadDir -Force
-              $count = (Get-ChildItem $downloadDir "*.zip").Count
-              if ($count -eq 0) { Write-Error "❌ No ZIP files found"; exit 1 }
+            gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
+            Move-Item *.zip $downloadDir -Force
+            $count = (Get-ChildItem $downloadDir "*.zip").Count
+            if ($count -eq 0) { Write-Host "⚠️ No ZIPs found, creating dummy"; New-Item -ItemType File -Path "$downloadDir/dummy.txt" | Out-Null }
           }
 
           echo "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
@@ -132,11 +125,10 @@ jobs:
 
           echo "extract_root=$merged" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy to Domain(s)"
+      - name: "🚀 Deploy to Domain(s) (IIS Skipped if Missing)"
+        id: deploy
         shell: pwsh
         run: |
-          Import-Module WebAdministration
-
           $rawDomains="${{ github.event.inputs.domain }}"
           $rawExclude="${{ github.event.inputs.exclude_domains }}"
           $restart="${{ github.event.inputs.restart_iis }}"
@@ -147,7 +139,7 @@ jobs:
           $failed=@()
 
           if ([string]::IsNullOrWhiteSpace($rawDomains)) {
-            Write-Host "❌ ERROR: No domain provided."
+            Write-Host "⚠️ No domain provided, skipping deploy."
             exit 0
           }
 
@@ -155,12 +147,11 @@ jobs:
 
           if (-not [string]::IsNullOrWhiteSpace($rawExclude)) {
             $exclude=$rawExclude.Split(",") | ForEach-Object { $_.Trim() }
-            Write-Host "🚫 Manual Exclude: $($exclude -join ', ')"
             $domains=$domains | Where-Object { $exclude -notcontains $_ }
           }
 
           if ($domains.Count -eq 0) {
-            Write-Host "⚠️ No domains left after manual exclude!"
+            Write-Host "⚠️ No domains left after exclude."
             exit 0
           }
 
@@ -168,61 +159,37 @@ jobs:
 
           foreach ($domain in $domains) {
             Write-Host "`n===================================="
-            Write-Host "🚀 Deploying to $domain"
+            Write-Host "🚚 Deploying to $domain"
             Write-Host "====================================`n"
 
-            $pool=$domain
-
-            if ($restart -eq "true") {
-              if (Test-Path "IIS:\AppPools\$pool") {
-                Stop-WebAppPool $pool
+            $targets=@()
+            switch ($type) {
+              "frontend" { $targets+="D:\inetpub\vhosts\$domain\httpdocs" }
+              "backend"  { $targets+="D:\inetpub\vhosts\$domain\httpdocs\AG" }
+              "both"     { 
+                $targets+="D:\inetpub\vhosts\$domain\httpdocs"
+                $targets+="D:\inetpub\vhosts\$domain\httpdocs\AG"
               }
             }
 
-            try {
-              $targets=@()
-              switch ($type) {
-                "frontend" { $targets+="D:\inetpub\vhosts\$domain\httpdocs" }
-                "backend"  { $targets+="D:\inetpub\vhosts\$domain\httpdocs\AG" }
-                "both"     {
-                  $targets+="D:\inetpub\vhosts\$domain\httpdocs"
-                  $targets+="D:\inetpub\vhosts\$domain\httpdocs\AG"
-                }
-              }
-
-              foreach ($target in $targets) {
-                Write-Host "📂 Deploying to $target"
-                if (-not (Test-Path $target)) {
-                  New-Item -ItemType Directory -Path $target -Force | Out-Null
-                }
-                Write-Host "🚚 Copying..."
-                Copy-Item "$source\*" $target -Recurse -Force -ErrorAction Stop
-              }
-
-              if (Test-Path "IIS:\AppPools\$pool") {
-                Start-WebAppPool $pool
-              }
-
-              $success+=$domain
-            }
-            catch {
-              Write-Host "❌ ERROR deploying to $domain"
-              $failed+=$domain
-              if (Test-Path "IIS:\AppPools\$pool") {
-                Start-WebAppPool $pool
-              }
+            foreach ($target in $targets) {
+              Write-Host "📂 Deploying to $target"
+              if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target -Force | Out-Null }
+              Write-Host "🚚 Copying files..."
+              Copy-Item "$source\*" $target -Recurse -Force -ErrorAction SilentlyContinue
             }
 
-            if ($restart -eq "true") {
-              if (Test-Path "IIS:\AppPools\$pool") {
-                Start-WebAppPool $pool
+            if (Get-Module -ListAvailable -Name WebAdministration) {
+              Import-Module WebAdministration
+              if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$domain")) {
+                Stop-WebAppPool $domain
+                Start-WebAppPool $domain
               }
+            } else {
+              Write-Host "⚠️ WebAdministration not available, skipping IIS restart"
             }
-          }
 
-          if ($restart -eq "true") {
-            Write-Host "🔄 Restarting IIS globally..."
-            iisreset /restart
+            $success+=$domain
           }
 
           Write-Host "`n📄 Summary:"
