@@ -1,4 +1,4 @@
-name: "🚚 Manual Backend Deploy (Local-Test-Friendly)"
+name: "🚚 Manual Backend/Frontend Deploy"
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ on:
           - test_runner
 
       domain:
-        description: "Comma-separated domain(s). Required."
+        description: "Comma-separated domain(s)."
         required: false
 
       exclude_domains:
@@ -33,7 +33,7 @@ on:
         type: boolean
 
       app_type:
-        description: "Deployment Type (backend -> AG, frontend -> httpdocs, both)"
+        description: "Deployment Type"
         required: true
         type: choice
         options:
@@ -42,7 +42,7 @@ on:
           - both
 
       release_tag:
-        description: "GitHub Release tag (e.g., release/V10.0.3)"
+        description: "GitHub Release tag (optional for local test)"
         required: false
 
 permissions:
@@ -53,148 +53,89 @@ jobs:
     runs-on: [self-hosted]
 
     steps:
-
       - name: "📥 Checkout Repository"
         uses: actions/checkout@v4
 
-      - name: "⚙️ Ensure GH CLI Installed"
+      - name: "⚙️ Ensure GH CLI (for local test fallback)"
         shell: pwsh
         run: |
           if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            Write-Host "📦 Installing GitHub CLI (ZIP fallback)..."
-            $version = "2.56.0"
-            $url = "https://github.com/cli/cli/releases/download/v$version/gh_${version}_windows_amd64.zip"
-            $zip = "$env:TEMP\ghcli.zip"
-            $dest = "$env:ProgramData\ghcli"
-
-            if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-
-            Invoke-WebRequest -Uri $url -OutFile $zip
-            Expand-Archive $zip $dest -Force
-
-            $exe = Get-ChildItem $dest -Recurse -Filter gh.exe | Select-Object -First 1
-            echo $exe.DirectoryName | Out-File $env:GITHUB_PATH -Append
+            Write-Host "⚠️ GH CLI not found. Skipping release download for local test."
           }
 
-      - name: "🧾 Download ZIP Assets from GitHub Release (or create dummy)"
+      - name: "🧾 Download & Prepare ZIPs"
         id: download
         shell: pwsh
         run: |
           $tag="${{ github.event.inputs.release_tag }}"
-
           $downloadDir="$PWD/release_zips"
-          if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
-          New-Item -ItemType Directory -Path $downloadDir | Out-Null
 
-          if (-not $tag) {
-            Write-Host "⚠️ No release tag provided, creating dummy ZIP for testing"
-            New-Item -ItemType File -Path "$downloadDir/dummy.txt" | Out-Null
-          } elseif (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            Write-Host "⚠️ GH CLI not available, skipping download, creating dummy ZIP"
-            New-Item -ItemType File -Path "$downloadDir/dummy.txt" | Out-Null
+          # Create folder for testing locally
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
+            New-Item -ItemType Directory -Path $downloadDir | Out-Null
+
+            # Example dummy files
+            New-Item -ItemType Directory -Path "$downloadDir/frontend" | Out-Null
+            New-Item -ItemType File -Path "$downloadDir/frontend/index.html" | Out-Null
+            New-Item -ItemType Directory -Path "$downloadDir/backend" | Out-Null
+            New-Item -ItemType File -Path "$downloadDir/backend/api.dll" | Out-Null
           } else {
             gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
+            if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
+            New-Item -ItemType Directory -Path $downloadDir | Out-Null
             Move-Item *.zip $downloadDir -Force
-            $count = (Get-ChildItem $downloadDir "*.zip").Count
-            if ($count -eq 0) { Write-Host "⚠️ No ZIPs found, creating dummy"; New-Item -ItemType File -Path "$downloadDir/dummy.txt" | Out-Null }
           }
 
           echo "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
 
-      - name: "📦 Extract and Merge ZIPs"
+      - name: "📦 Extract & Merge ZIPs"
         id: extract
         shell: pwsh
         run: |
           $src="${{ steps.download.outputs.download_dir }}"
           $root="$PWD/deploy"
-
           if (Test-Path $root) { Remove-Item -Recurse -Force $root }
           New-Item -ItemType Directory -Path $root | Out-Null
 
-          $merged=Join-Path $root "merged"
-          New-Item -ItemType Directory $merged | Out-Null
+          $merged="$root/merged"
+          New-Item -ItemType Directory -Path $merged | Out-Null
 
-          foreach ($zip in Get-ChildItem $src "*.zip") {
-            $tmp=Join-Path $root $zip.BaseName
-            Expand-Archive $zip.FullName $tmp -Force
-
-            Get-ChildItem $tmp | ForEach-Object {
-              Copy-Item $_.FullName -Destination $merged -Recurse -Force
-            }
+          foreach ($item in Get-ChildItem $src) {
+            Copy-Item $item.FullName $merged -Recurse -Force
           }
 
           echo "extract_root=$merged" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy to Domain(s) (IIS Skipped if Missing)"
-        id: deploy
+      - name: "🚀 Deploy to Domains"
         shell: pwsh
         run: |
-          $rawDomains="${{ github.event.inputs.domain }}"
-          $rawExclude="${{ github.event.inputs.exclude_domains }}"
+          $source="${{ steps.extract.outputs.extract_root }}"
+          $domains=(${{ github.event.inputs.domain }} -split ",") | ForEach-Object { $_.Trim() }
+          $exclude=(${{ github.event.inputs.exclude_domains }} -split ",") | ForEach-Object { $_.Trim() }
           $restart="${{ github.event.inputs.restart_iis }}"
           $type="${{ github.event.inputs.app_type }}"
-          $source="${{ steps.extract.outputs.extract_root }}"
 
-          $success=@()
-          $failed=@()
-
-          if ([string]::IsNullOrWhiteSpace($rawDomains)) {
-            Write-Host "⚠️ No domain provided, skipping deploy."
-            exit 0
-          }
-
-          $domains=$rawDomains.Split(",") | ForEach-Object { $_.Trim() }
-
-          if (-not [string]::IsNullOrWhiteSpace($rawExclude)) {
-            $exclude=$rawExclude.Split(",") | ForEach-Object { $_.Trim() }
-            $domains=$domains | Where-Object { $exclude -notcontains $_ }
-          }
-
-          if ($domains.Count -eq 0) {
-            Write-Host "⚠️ No domains left after exclude."
-            exit 0
-          }
-
-          Write-Host "🔹 Deploy to: $($domains -join ', ')"
+          if ($domains.Count -eq 0) { Write-Host "⚠️ No domains to deploy"; exit 0 }
+          $domains=$domains | Where-Object { $exclude -notcontains $_ }
 
           foreach ($domain in $domains) {
-            Write-Host "`n===================================="
-            Write-Host "🚚 Deploying to $domain"
-            Write-Host "====================================`n"
-
-            $targets=@()
-            switch ($type) {
-              "frontend" { $targets+="D:\inetpub\vhosts\$domain\httpdocs" }
-              "backend"  { $targets+="D:\inetpub\vhosts\$domain\httpdocs\AG" }
-              "both"     { 
-                $targets+="D:\inetpub\vhosts\$domain\httpdocs"
-                $targets+="D:\inetpub\vhosts\$domain\httpdocs\AG"
+              $targets=@()
+              switch ($type) {
+                  "frontend" { $targets+= @{ Source = Join-Path $source "frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" } }
+                  "backend"  { $targets+= @{ Source = Join-Path $source "backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" } }
+                  "both" {
+                      $targets+= @{ Source = Join-Path $source "frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
+                      $targets+= @{ Source = Join-Path $source "backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
+                  }
               }
-            }
 
-            foreach ($target in $targets) {
-              Write-Host "📂 Deploying to $target"
-              if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target -Force | Out-Null }
-              Write-Host "🚚 Copying files..."
-              Copy-Item "$source\*" $target -Recurse -Force -ErrorAction SilentlyContinue
-            }
-
-            if (Get-Module -ListAvailable -Name WebAdministration) {
-              Import-Module WebAdministration
-              if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$domain")) {
-                Stop-WebAppPool $domain
-                Start-WebAppPool $domain
+              foreach ($target in $targets) {
+                  Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
+                  if (-not (Test-Path $target.Destination)) { New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null }
+                  Copy-Item "$($target.Source)\*" $target.Destination -Recurse -Force
               }
-            } else {
-              Write-Host "⚠️ WebAdministration not available, skipping IIS restart"
-            }
-
-            $success+=$domain
           }
-
-          Write-Host "`n📄 Summary:"
-          Write-Host "Successful: $($success -join ', ')"
-          Write-Host "Failed: $($failed -join ', ')"
 
       - name: "🧹 Cleanup workspace"
         if: always()
@@ -202,4 +143,4 @@ jobs:
         run: |
           Remove-Item "$PWD/release_zips" -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host "🧹 Cleanup completed."
+          Write-Host "🧹 Cleanup done"
