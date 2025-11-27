@@ -19,6 +19,7 @@ on:
           - AWS_PROD_05
           - aachal_behl
           - ARB
+          - aachal
 
       domain:
         description: "Comma-separated domain(s). Required."
@@ -51,7 +52,7 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, ARB]
+    runs-on: [self-hosted, aachal]
 
     steps:
 
