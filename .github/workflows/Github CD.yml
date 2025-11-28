@@ -35,22 +35,15 @@ jobs:
           New-Item -ItemType Directory -Path $root | Out-Null
           echo "merged_root=$root" >> $env:GITHUB_OUTPUT
 
-      - name: "📦 Extract ZIPs"
+      - name: "📦 Extract All ZIPs"
         id: extract
         shell: pwsh
         run: |
           $sourceFolder = "C:\deploy_test\source"
           $extractRoot  = "${{ steps.merge.outputs.merged_root }}"
-          $deployType   = "${{ github.event.inputs.app_type }}"
           $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
 
           foreach ($zip in $zipFiles) {
-              $isBackend  = $zip.Name -match "v10"
-              $isFrontend = $zip.Name -match "ag-app|crew|e-invoice|e-statement|e-proposal"
-
-              if ($deployType -eq "backend" -and -not $isBackend) { continue }
-              if ($deployType -eq "frontend" -and -not $isFrontend) { continue }
-
               $temp = Join-Path $extractRoot ("extract_" + [System.IO.Path]::GetFileNameWithoutExtension($zip.Name))
               New-Item -ItemType Directory -Path $temp | Out-Null
               Write-Host "🟩 Extracting $($zip.Name) → $temp"
@@ -67,30 +60,31 @@ jobs:
           $domains = "${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
           $deployType = "${{ github.event.inputs.app_type }}"
 
-          # Define deployment maps
+          # Map frontend folders
           $frontendMap = @{
-              "ag-app"             = "AG"
-              "crew"               = "CREW"
-              "e-proposal"         = "EProposal"
-              "e-invoice"          = "EInvoice"
-              "e-statement"        = "EStatement"
+              "ag-app"      = "AG"
+              "crew"        = "CREW"
+              "e-proposal"  = "EProposal"
+              "e-invoice"   = "EInvoice"
+              "e-statement" = "EStatement"
           }
 
+          # Map backend folders
           $backendMap = @{
               "v10" = "AG"
           }
 
-          # Select map and source root
+          # Select which map to use based on deployment type
           switch ($deployType) {
-              "frontend" { $deployMap = $frontendMap; $srcRoot = Join-Path $extractRoot "" }
-              "backend"  { $deployMap = $backendMap;  $srcRoot = Join-Path $extractRoot "" }
-              "both"     { $deployMap = $frontendMap + $backendMap; $srcRoot = Join-Path $extractRoot "" }
+              "frontend" { $deployMap = $frontendMap }
+              "backend"  { $deployMap = $backendMap }
+              "both"     { $deployMap = $frontendMap + $backendMap }
           }
 
           foreach ($domain in $domains) {
               Write-Host "`n➡ Deploying to domain: $domain"
 
-              foreach ($folder in Get-ChildItem -Path $srcRoot -Directory) {
+              foreach ($folder in Get-ChildItem -Path $extractRoot -Directory) {
                   if ($deployMap.ContainsKey($folder.Name)) {
                       $destFolder = Join-Path $destinationRoot $deployMap[$folder.Name]
                       Write-Host "📂 Deploying $($folder.Name) → $destFolder"
