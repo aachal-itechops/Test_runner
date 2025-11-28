@@ -41,16 +41,15 @@ jobs:
         run: |
           $sourceFolder = "C:\deploy_test\source"
           $extractRoot  = "${{ steps.merge.outputs.merged_root }}"
-          $deployType = "${{ github.event.inputs.app_type }}"
+          $deployType   = "${{ github.event.inputs.app_type }}"
           $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
 
           foreach ($zip in $zipFiles) {
-              # Decide whether to extract based on type
-              $isFrontend = $zip.Name -match "crew|e-invoice|e-statement|e-proposal"
-              $isBackend  = $zip.Name -match "ag-app|v10"
+              $isBackend  = $zip.Name -match "v10"
+              $isFrontend = $zip.Name -match "ag-app|crew|e-invoice|e-statement|e-proposal"
 
-              if ($deployType -eq "frontend" -and -not $isFrontend) { continue }
               if ($deployType -eq "backend" -and -not $isBackend) { continue }
+              if ($deployType -eq "frontend" -and -not $isFrontend) { continue }
 
               $temp = Join-Path $extractRoot ("extract_" + [System.IO.Path]::GetFileNameWithoutExtension($zip.Name))
               New-Item -ItemType Directory -Path $temp | Out-Null
@@ -77,32 +76,35 @@ jobs:
               foreach ($folder in $extractedFolders) {
                   $dest = $null
 
-                  # AG backend
-                  if (Get-ChildItem $folder.FullName -Recurse | Where-Object { $_.Name -match "ag-app|v10" }) {
-                      if ($deployType -eq "frontend") { continue }
-                      $dest = Join-Path $destinationRoot "AG"
-                  }
-                  # CREW frontend
-                  elseif ($folder.Name -match "crew") {
-                      if ($deployType -eq "backend") { continue }
-                      $dest = Join-Path $destinationRoot "CREW"
-                  }
-                  # Other frontend apps
-                  elseif ($folder.Name -match "e-invoice") { 
-                      if ($deployType -eq "backend") { continue }
-                      $dest = Join-Path $destinationRoot "EInvoice"
-                  }
-                  elseif ($folder.Name -match "e-statement") { 
-                      if ($deployType -eq "backend") { continue }
-                      $dest = Join-Path $destinationRoot "EStatement"
-                  }
-                  elseif ($folder.Name -match "e-proposal") { 
-                      if ($deployType -eq "backend") { continue }
-                      $dest = Join-Path $destinationRoot "EProposal"
-                  } 
-                  else { 
-                      Write-Host "⚠ Skipping unknown folder: $($folder.Name)"
-                      continue
+                  switch ($true) {
+                      # Backend: v10 only
+                      { $folder.Name -match "v10" } {
+                          if ($deployType -eq "frontend") { continue }
+                          $dest = Join-Path $destinationRoot "AG"
+                      }
+
+                      # Frontend: ag-app + other frontend files
+                      { $folder.Name -match "ag-app|crew" } {
+                          if ($deployType -eq "backend") { continue }
+                          $dest = Join-Path $destinationRoot "httpdocs"
+                      }
+                      { $folder.Name -match "e-invoice" } {
+                          if ($deployType -eq "backend") { continue }
+                          $dest = Join-Path $destinationRoot "EInvoice"
+                      }
+                      { $folder.Name -match "e-statement" } {
+                          if ($deployType -eq "backend") { continue }
+                          $dest = Join-Path $destinationRoot "EStatement"
+                      }
+                      { $folder.Name -match "e-proposal" } {
+                          if ($deployType -eq "backend") { continue }
+                          $dest = Join-Path $destinationRoot "EProposal"
+                      }
+
+                      default {
+                          Write-Host "⚠ Skipping unknown folder: $($folder.Name)"
+                          continue
+                      }
                   }
 
                   $targets += @{ Source = "$($folder.FullName)\*" ; Destination = $dest }
