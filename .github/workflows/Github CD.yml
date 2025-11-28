@@ -1,97 +1,155 @@
-name: 🚚 Manual Deploy (Auto-Detect Apps)
+name: "🚚 Manual Local Deploy Test"
 
 on:
   workflow_dispatch:
     inputs:
-      type:
-        description: "What do you want to deploy?"
+      domain:
+        description: "Comma-separated domains"
+        required: false
+
+      app_type:
+        description: "Deployment Type"
         required: true
         type: choice
         options:
           - frontend
           - backend
           - both
-      domain:
-        description: "Which domain?"
-        required: false
-        type: choice
-        options:
-          - domain1.com
-          - domain2.com
-          - domain3.com
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: [self-hosted]
 
     steps:
-      - name: 🟦 Set variables
-        run: |
-          $source = "C:\Users\BAPS\actions-runner-testrunner\_work\Test_runner\Test_runner\deploy\merged"
-          $deployType = "${{ github.event.inputs.type }}"
-          $domain = "${{ github.event.inputs.domain }}"
-          $webroot = "D:\inetpub\vhosts\$domain\httpdocs"
 
-          Write-Host "Source = $source"
-          Write-Host "Deploy type = $deployType"
-          Write-Host "Domain = $domain"
-          Write-Host "Webroot = $webroot"
+      - name: "📥 Checkout Repo"
+        uses: actions/checkout@v4
 
-      - name: 📦 Process ZIP Files (Auto-Detect App)
+      - name: "📦 Prepare Merge Folder from ZIPs"
+        id: merge
         shell: pwsh
         run: |
-          $source = "C:\Users\BAPS\actions-runner-testrunner\_work\Test_runner\Test_runner\deploy\merged"
-          $deployType = "${{ github.event.inputs.type }}"
-          $domain = "${{ github.event.inputs.domain }}"
-          $webroot = "D:\inetpub\vhosts\$domain\httpdocs"
+          $root = "$PWD/deploy"
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          New-Item -ItemType Directory -Path $root | Out-Null
 
-          function Detect-AppName($folderPath) {
-              $names = @(
-                "AG", "Crew", "E-Statement", "E-Invoice", "E-Proposal"
-              )
+          $merged = "$root/merged"
+          New-Item -ItemType Directory -Path $merged | Out-Null
 
-              foreach ($n in $names) {
-                if (Get-ChildItem -Path $folderPath -Recurse -Filter "*$n*" -ErrorAction SilentlyContinue) {
-                  return $n
-                }
+          $frontendMerged = "$merged/frontend"
+          $backendMerged  = "$merged/backend"
+          New-Item -ItemType Directory -Path $frontendMerged | Out-Null
+          New-Item -ItemType Directory -Path $backendMerged  | Out-Null
+
+          $frontendZip = "C:\deploy_test\frontend.zip"
+          $backendZip  = "C:\deploy_test\backend.zip"
+
+          if (Test-Path $frontendZip) {
+              Expand-Archive $frontendZip -DestinationPath $frontendMerged -Force
+          }
+          if (Test-Path $backendZip) {
+              Expand-Archive $backendZip -DestinationPath $backendMerged -Force
+          }
+
+          echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
+
+
+      - name: "🚀 Deploy merged files using targets"
+        shell: pwsh
+        run: |
+          $source="${{ steps.merge.outputs.merged_root }}"
+          $domains="${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
+          $type="${{ github.event.inputs.app_type }}"
+
+          function Detect-AppFolder($folderPath) {
+              $patterns = @{
+                "AG"          = "AG"
+                "Crew"        = "CREW"
+                "Invoice"     = "E-Invoice"
+                "Statement"   = "E-Statement"
+                "Proposal"    = "E-Proposal"
+              }
+
+              foreach ($p in $patterns.Keys) {
+                  if (Get-ChildItem -Path $folderPath -Recurse -Filter "*$p*" -ErrorAction SilentlyContinue) {
+                      return $patterns[$p]
+                  }
               }
 
               return "UNKNOWN"
           }
 
-          function Deploy-Folder($folder, $deployType) {
-              $appName = Detect-AppName $folder.FullName
-              if ($appName -eq "UNKNOWN") {
-                Write-Host "⚠ No matching app name detected for $($folder.Name)"
-                return
+          foreach ($domain in $domains) {
+
+            Write-Host "`n➡ Deploying to $domain"
+
+            # Local test destination
+            $webroot = "C:\deploy_test\destination\httpdocs"
+
+            $targets = @()
+
+            switch ($type) {
+
+              "frontend" {
+                $targets += @{
+                  Source = "$source\frontend"
+                  Logical = "frontend"
+                }
               }
 
-              $dest = Join-Path $webroot $appName
-              if (!(Test-Path $dest)) { New-Item -ItemType Directory -Path $dest | Out-Null }
+              "backend" {
+                $targets += @{
+                  Source = "$source\backend"
+                  Logical = "backend"
+                }
+              }
 
-              Write-Host "📁 Detected App: $appName"
-              Write-Host "➡ Copying to $dest"
+              "both" {
+                $targets += @{ Source = "$source\frontend"; Logical = "frontend" }
+                $targets += @{ Source = "$source\backend";  Logical = "backend"  }
+              }
 
-              Remove-Item "$dest\*" -Recurse -Force -ErrorAction SilentlyContinue
-              Copy-Item -Path "$($folder.FullName)\*" -Destination $dest -Recurse -Force
-          }
-
-          # Process only allowed types
-          $zipFiles = Get-ChildItem -Path $source -Filter *.zip
-
-          foreach ($zip in $zipFiles) {
-
-            $temp = Join-Path $source "extract_$((Get-Random))"
-            New-Item -ItemType Directory -Path $temp | Out-Null
-
-            Write-Host "🟩 Extracting $($zip.Name)"
-            Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
-
-            $topFolders = Get-ChildItem -Path $temp -Directory
-
-            foreach ($folder in $topFolders) {
-              Deploy-Folder -folder $folder -deployType $deployType
             }
 
-            Remove-Item $temp -Recurse -Force
+            foreach ($target in $targets) {
+
+              $top = Get-ChildItem -Path $target.Source -Directory
+
+              foreach ($folder in $top) {
+
+                $appName = Detect-AppFolder $folder.FullName
+
+                if ($appName -eq "UNKNOWN") {
+                  Write-Host "⚠ Skipped (No App Detected): $($folder.FullName)"
+                  continue
+                }
+
+                # AG frontend + AG backend both → AG folder
+                if ($appName -eq "AG" -or $appName -eq "CREW") {
+                  $dest = Join-Path $webroot "AG"
+                }
+                else {
+                  $dest = Join-Path $webroot $appName
+                }
+
+                if (!(Test-Path $dest)) {
+                  New-Item -ItemType Directory -Path $dest -Force | Out-Null
+                }
+
+                Write-Host "📁 Deploying $appName → $dest"
+                Remove-Item "$dest\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Copy-Item "$($folder.FullName)\*" $dest -Recurse -Force
+              }
+
+            }
           }
+
+
+      - name: "🧹 Cleanup"
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
