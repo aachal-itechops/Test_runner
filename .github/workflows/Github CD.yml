@@ -2,19 +2,6 @@ name: "🚚 Manual Local Deploy Test"
 
 on:
   workflow_dispatch:
-    inputs:
-      domain:
-        description: "Comma-separated domains"
-        required: false
-
-      app_type:
-        description: "Deployment Type"
-        required: true
-        type: choice
-        options:
-          - frontend
-          - backend
-          - both
 
 permissions:
   contents: read
@@ -27,115 +14,74 @@ jobs:
       - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
-      # ------------------------------------------
-      # 1. PREPARE MERGED FOLDER
-      # ------------------------------------------
-      - name: "📦 Prepare Merge Folder from ZIPs"
-        id: merge
+      - name: "🚀 Content-Based Deploy from ZIPs"
         shell: pwsh
         run: |
-          $root = "$PWD/deploy"
-          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
-          New-Item -ItemType Directory -Path $root | Out-Null
-
-          $merged = "$root/merged"
-          New-Item -ItemType Directory -Path $merged | Out-Null
-
-          $frontendMerged = "$merged/frontend"
-          $backendMerged  = "$merged/backend"
-
-          New-Item -ItemType Directory -Path $frontendMerged | Out-Null
-          New-Item -ItemType Directory -Path $backendMerged  | Out-Null
-
           $sourceFolder = "C:\deploy_test\source"
+          $destRoot     = "C:\deploy_test\destination\httpdocs"
 
-          # ---- FRONTEND ZIP (CREW) ----
-          $frontendZip = Get-ChildItem $sourceFolder -Filter "*crew*.zip" | Select-Object -First 1
-          if ($frontendZip) {
-            Write-Host "📦 Extracting FRONTEND: $($frontendZip.Name)"
-            Expand-Archive $frontendZip.FullName -DestinationPath $frontendMerged -Force
-          } else {
-            Write-Warning "⚠️ FRONTEND ZIP NOT FOUND (crew)"
+          # Destination folders (auto-create if missing)
+          $folders = @("AG","CREW","EInvoice","EProposal","EStatement")
+          foreach ($f in $folders) {
+              $path = Join-Path $destRoot $f
+              if (-not (Test-Path $path)) {
+                  New-Item -Path $path -ItemType Directory -Force | Out-Null
+              }
           }
 
-          # ---- BACKEND ZIP (AG APP) ----
-          $backendZip = Get-ChildItem $sourceFolder -Filter "*ag-app*.zip" | Select-Object -First 1
-          if ($backendZip) {
-            Write-Host "📦 Extracting BACKEND: $($backendZip.Name)"
-            Expand-Archive $backendZip.FullName -DestinationPath $backendMerged -Force
-          } else {
-            Write-Warning "⚠️ BACKEND ZIP NOT FOUND (ag-app)"
+          # Process every .zip file
+          $zipFiles = Get-ChildItem $sourceFolder -Filter "*.zip"
+
+          foreach ($zip in $zipFiles) {
+
+              Write-Host "`n📦 Processing ZIP: $($zip.Name)"
+
+              # Create temp extraction folder
+              $temp = Join-Path $env:RUNNER_TEMP ("z_" + [guid]::NewGuid().ToString())
+              New-Item -Path $temp -ItemType Directory | Out-Null
+
+              # Extract ZIP
+              Expand-Archive -Path $zip.FullName -DestinationPath $temp -Force
+
+              # Scan extracted content
+              $allItems = Get-ChildItem -Path $temp -Recurse | Select-Object -ExpandProperty FullName
+
+              # Determine destination by content
+              $destination = ""
+
+              if ($allItems -match "ag") {
+                  $destination = "AG"
+              }
+              elseif ($allItems -match "crew") {
+                  $destination = "CREW"
+              }
+              elseif ($allItems -match "e-?invoice") {
+                  $destination = "EInvoice"
+              }
+              elseif ($allItems -match "e-?proposal") {
+                  $destination = "EProposal"
+              }
+              elseif ($allItems -match "e-?statement") {
+                  $destination = "EStatement"
+              }
+              else {
+                  Write-Warning "⚠️ No matching keyword found in ZIP content. Skipping: $($zip.Name)"
+                  continue
+              }
+
+              $destPath = Join-Path $destRoot $destination
+              Write-Host "📂 Detected → $destination"
+              Write-Host "📥 Copying content to $destPath"
+
+              # Copy extracted files to destination
+              Copy-Item "$temp\*" $destPath -Recurse -Force
+
+              # Cleanup temp folder
+              Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
           }
 
-          echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
-
-      # ------------------------------------------
-      # 2. DEPLOYMENT LOGIC
-      # ------------------------------------------
-      - name: "🚀 Deploy merged files"
-        shell: pwsh
-        run: |
-          $source  = "${{ steps.merge.outputs.merged_root }}"
-          $domains = "${{ github.event.inputs.domain }}"
-
-          if (-not $domains) {
-            $domains = @("local-test")
-          } else {
-            $domains = $domains.Split(",") | ForEach-Object { $_.Trim() }
-          }
-
-          $type = "${{ github.event.inputs.app_type }}"
-
-          foreach ($domain in $domains) {
-
-            Write-Host "➡ Deploying for: $domain"
-
-            $targets = @()
-
-            switch ($type) {
-
-              "frontend" {
-                $targets += @{
-                  Source      = "$source\frontend"
-                  Destination = "C:\deploy_test\destination\httpdocs\CREW"
-                }
-              }
-
-              "backend" {
-                $targets += @{
-                  Source      = "$source\backend"
-                  Destination = "C:\deploy_test\destination\httpdocs\AG"
-                }
-              }
-
-              "both" {
-                $targets += @{
-                  Source      = "$source\frontend"
-                  Destination = "C:\deploy_test\destination\httpdocs\CREW"
-                }
-                $targets += @{
-                  Source      = "$source\backend"
-                  Destination = "C:\deploy_test\destination\httpdocs\AG"
-                }
-              }
-            }
-
-            foreach ($target in $targets) {
-              Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
-
-              if (-not (Test-Path $target.Destination)) {
-                New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null
-              }
-
-              Copy-Item "$($target.Source)\*" $target.Destination -Recurse -Force
-            }
-          }
-
-      # ------------------------------------------
-      # 3. CLEANUP TEMP FOLDER
-      # ------------------------------------------
       - name: "🧹 Cleanup"
         if: always()
         shell: pwsh
         run: |
-          Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "Cleanup completed."
