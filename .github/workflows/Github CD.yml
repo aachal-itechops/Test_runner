@@ -5,7 +5,7 @@ on:
     inputs:
       domain:
         description: "Comma-separated domains"
-        required: false
+        required: true
       app_type:
         description: "Deployment Type"
         required: true
@@ -27,22 +27,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: "📦 Prepare Merge Folder"
-        id: merge
+        id: prep
         shell: pwsh
         run: |
           $root = "$PWD/deploy"
           if (Test-Path $root) { Remove-Item $root -Recurse -Force }
           New-Item -ItemType Directory -Path $root | Out-Null
-          echo "merged_root=$root" >> $env:GITHUB_OUTPUT
+          echo "root=$root" >> $env:GITHUB_OUTPUT
 
       - name: "📦 Extract ZIPs"
         id: extract
         shell: pwsh
         run: |
           $sourceFolder = "C:\deploy_test\source"
-          $extractRoot  = "${{ steps.merge.outputs.merged_root }}"
+          $extractRoot  = "${{ steps.prep.outputs.root }}"
           $deployType   = "${{ github.event.inputs.app_type }}"
-          $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
+          $zipFiles = Get-ChildItem $sourceFolder -Filter *.zip*
 
           foreach ($zip in $zipFiles) {
               $isBackend  = $zip.Name -match "v10"
@@ -51,23 +51,24 @@ jobs:
               if ($deployType -eq "backend" -and -not $isBackend) { continue }
               if ($deployType -eq "frontend" -and -not $isFrontend) { continue }
 
-              $temp = Join-Path $extractRoot ("extract_" + [System.IO.Path]::GetFileNameWithoutExtension($zip.Name))
-              New-Item -ItemType Directory -Path $temp | Out-Null
-              Write-Host "🟩 Extracting $($zip.Name) → $temp"
-              Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
+              $folderName = [System.IO.Path]::GetFileNameWithoutExtension($zip.Name)
+              $target = Join-Path $extractRoot $folderName
+
+              New-Item -ItemType Directory -Path $target -Force | Out-Null
+              Write-Host "🟩 Extracting $($zip.Name) → $target"
+              Expand-Archive -Path $zip.FullName -DestinationPath $target -Force
           }
 
           echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy Extracted Files to Proper Folders"
+      - name: "🚀 Deploy Extracted Folders"
         shell: pwsh
         run: |
-          $extractRoot = "${{ steps.extract.outputs.extract_root }}"
-          $destinationRoot = "C:\deploy_test\destination\httpdocs"
+          $srcRoot = "${{ steps.extract.outputs.extract_root }}"
           $domains = "${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
           $deployType = "${{ github.event.inputs.app_type }}"
 
-          # Frontend folder mapping
+          # Deployment maps
           $frontendMap = @{
               "ag-app"      = "AG"
               "crew"        = "CREW"
@@ -76,12 +77,10 @@ jobs:
               "e-statement" = "EStatement"
           }
 
-          # Backend folder mapping
           $backendMap = @{
               "v10" = "AG"
           }
 
-          # Select map based on deploy type
           switch ($deployType) {
               "frontend" { $deployMap = $frontendMap }
               "backend"  { $deployMap = $backendMap }
@@ -89,27 +88,29 @@ jobs:
           }
 
           foreach ($domain in $domains) {
-              Write-Host "`n➡ Deploying to domain: $domain"
+              Write-Host "`n🌍 Deploying domain: $domain"
 
-              foreach ($folder in Get-ChildItem -Path $extractRoot -Directory) {
-                  # Normalize folder name: remove "extract_" prefix and suffix
-                  $normalized = $folder.Name -replace "^extract[_-]", "" -replace "-.*$", ""
+              foreach ($key in $deployMap.Keys) {
 
-                  # Find matching key in deploy map
-                  $match = $deployMap.Keys | Where-Object { $normalized -match $_ }
+                  # Source folder is extracted folder name that contains key
+                  $src = Get-ChildItem -Path $srcRoot -Directory | Where-Object { $_.Name -match $key }
 
-                  if ($match) {
-                      $destFolder = Join-Path $destinationRoot $deployMap[$match]
-                      Write-Host "📂 Deploying $($folder.Name) → $destFolder"
-
-                      if (-not (Test-Path $destFolder)) {
-                          New-Item -ItemType Directory -Path $destFolder -Force | Out-Null
-                      }
-
-                      Copy-Item "$($folder.FullName)\*" $destFolder -Recurse -Force
-                  } else {
-                      Write-Host "⚠ Skipping unknown folder: $($folder.Name)"
+                  if (-not $src) {
+                      Write-Warning "⚠️ Cannot find extracted folder for: $key — skipping"
+                      continue
                   }
+
+                  $srcPath = $src.FullName
+                  $targetPath = "C:\deploy_test\destination\httpdocs\$($deployMap[$key])"
+
+                  if (-not (Test-Path $targetPath)) {
+                      Write-Host "📁 Creating $targetPath ..."
+                      New-Item -ItemType Directory -Force -Path $targetPath | Out-Null
+                  }
+
+                  Write-Host "🚚 Copying $key → $targetPath ..."
+                  Copy-Item "$srcPath\*" -Destination $targetPath -Recurse -Force
+                  Write-Host "✅ $key deployed successfully."
               }
           }
 
