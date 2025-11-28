@@ -71,7 +71,7 @@ jobs:
 
           # Map backend folders
           $backendMap = @{
-              "v10" = "AG"
+              "V 10.0.1" = "AG"
           }
 
           # Select which map to use based on deployment type
