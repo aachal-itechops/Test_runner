@@ -59,7 +59,7 @@ jobs:
 
           echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy Extracted Files using Targets"
+      - name: "🚀 Deploy Extracted Files to Proper Folders"
         shell: pwsh
         run: |
           $extractRoot = "${{ steps.extract.outputs.extract_root }}"
@@ -77,16 +77,20 @@ jobs:
                   $dest = $null
 
                   switch ($true) {
-                      # Backend: v10 only
+                      # Backend only
                       { $folder.Name -match "v10" } {
                           if ($deployType -eq "frontend") { continue }
                           $dest = Join-Path $destinationRoot "AG"
                       }
 
-                      # Frontend: ag-app + other frontend files
-                      { $folder.Name -match "ag-app|crew" } {
+                      # Frontend files
+                      { $folder.Name -match "ag-app" } {
                           if ($deployType -eq "backend") { continue }
-                          $dest = Join-Path $destinationRoot "httpdocs"
+                          $dest = Join-Path $destinationRoot "AG"
+                      }
+                      { $folder.Name -match "crew" } {
+                          if ($deployType -eq "backend") { continue }
+                          $dest = Join-Path $destinationRoot "CREW"
                       }
                       { $folder.Name -match "e-invoice" } {
                           if ($deployType -eq "backend") { continue }
@@ -113,7 +117,7 @@ jobs:
               # Deploy all targets
               foreach ($target in $targets) {
                   Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
-                  if (-not (Test-Path $target.Destination)) { New-Item -ItemType Directory -Path $target.Destination | Out-Null }
+                  if (-not (Test-Path $target.Destination)) { New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null }
                   Copy-Item "$($target.Source)" $target.Destination -Recurse -Force
               }
           }
