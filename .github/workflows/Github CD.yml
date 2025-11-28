@@ -27,6 +27,9 @@ jobs:
       - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
+      # ------------------------------------------
+      # 1. PREPARE MERGED FOLDER
+      # ------------------------------------------
       - name: "📦 Prepare Merge Folder from ZIPs"
         id: merge
         shell: pwsh
@@ -40,29 +43,36 @@ jobs:
 
           $frontendMerged = "$merged/frontend"
           $backendMerged  = "$merged/backend"
+
           New-Item -ItemType Directory -Path $frontendMerged | Out-Null
           New-Item -ItemType Directory -Path $backendMerged  | Out-Null
 
-          $frontendZip = "C:\deploy_test\frontend.zip"
-          $backendZip  = "C:\deploy_test\backend.zip"
+          $sourceFolder = "C:\deploy_test\source"
 
-          if (Test-Path $frontendZip) {
-              Write-Host "📦 Extracting frontend ZIP..."
-              Expand-Archive $frontendZip -DestinationPath $frontendMerged -Force
+          # ---- FRONTEND ZIP (CREW) ----
+          $frontendZip = Get-ChildItem $sourceFolder -Filter "*crew*.zip" | Select-Object -First 1
+          if ($frontendZip) {
+            Write-Host "📦 Extracting FRONTEND: $($frontendZip.Name)"
+            Expand-Archive $frontendZip.FullName -DestinationPath $frontendMerged -Force
           } else {
-              Write-Warning "⚠️ Frontend ZIP not found!"
+            Write-Warning "⚠️ FRONTEND ZIP NOT FOUND (crew)"
           }
 
-          if (Test-Path $backendZip) {
-              Write-Host "📦 Extracting backend ZIP..."
-              Expand-Archive $backendZip -DestinationPath $backendMerged -Force
+          # ---- BACKEND ZIP (AG APP) ----
+          $backendZip = Get-ChildItem $sourceFolder -Filter "*ag-app*.zip" | Select-Object -First 1
+          if ($backendZip) {
+            Write-Host "📦 Extracting BACKEND: $($backendZip.Name)"
+            Expand-Archive $backendZip.FullName -DestinationPath $backendMerged -Force
           } else {
-              Write-Warning "⚠️ Backend ZIP not found!"
+            Write-Warning "⚠️ BACKEND ZIP NOT FOUND (ag-app)"
           }
 
           echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy merged files using targets"
+      # ------------------------------------------
+      # 2. DEPLOYMENT LOGIC
+      # ------------------------------------------
+      - name: "🚀 Deploy merged files"
         shell: pwsh
         run: |
           $source="${{ steps.merge.outputs.merged_root }}"
@@ -73,28 +83,38 @@ jobs:
             Write-Host "➡ Deploying to $domain"
 
             $targets = @()
+
             switch ($type) {
-              "frontend" { 
-                $targets += @{ Source = "$source\frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
-              }
-              "backend" { 
-                $targets += @{ Source = "$source\backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
-              }
-              "both" {
-                $targets += @{ Source = "$source\frontend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs" }
-                $targets += @{ Source = "$source\backend"; Destination = "D:\inetpub\vhosts\$domain\httpdocs\AG" }
-              }
+
+            "frontend" {
+              $targets += @{
+              Source      = "$source\frontend"
+              Destination = "C:\deploy_test\destination\httpdocs\CREW"
+            }
             }
 
-            foreach ($target in $targets) {
-              Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
-              if (-not (Test-Path $target.Destination)) {
-                New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null
-              }
-              Copy-Item "$($target.Source)\*" $target.Destination -Recurse -Force
-            }
+          "backend" {
+            $targets += @{
+            Source      = "$source\backend"
+            Destination = "C:\deploy_test\destination\httpdocs\AG"
+          }
           }
 
+          "both" {
+          $targets += @{
+          Source      = "$source\frontend"
+          Destination = "C:\deploy_test\destination\httpdocs\CREW"
+          }
+          $targets += @{
+          Source      = "$source\backend"
+          Destination = "C:\deploy_test\destination\httpdocs\AG"
+          }
+          }
+          }
+
+      # ------------------------------------------
+      # 3. CLEANUP TEMP FOLDER
+      # ------------------------------------------
       - name: "🧹 Cleanup"
         if: always()
         shell: pwsh
