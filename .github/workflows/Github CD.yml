@@ -67,58 +67,42 @@ jobs:
           $domains = "${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
           $deployType = "${{ github.event.inputs.app_type }}"
 
+          # Define deployment maps
+          $frontendMap = @{
+              "ag-app"             = "AG"
+              "crew"               = "CREW"
+              "e-proposal"         = "EProposal"
+              "e-invoice"          = "EInvoice"
+              "e-statement"        = "EStatement"
+          }
+
+          $backendMap = @{
+              "v10" = "AG"
+          }
+
+          # Select map and source root
+          switch ($deployType) {
+              "frontend" { $deployMap = $frontendMap; $srcRoot = Join-Path $extractRoot "" }
+              "backend"  { $deployMap = $backendMap;  $srcRoot = Join-Path $extractRoot "" }
+              "both"     { $deployMap = $frontendMap + $backendMap; $srcRoot = Join-Path $extractRoot "" }
+          }
+
           foreach ($domain in $domains) {
               Write-Host "`n➡ Deploying to domain: $domain"
 
-              $targets = @()
-              $extractedFolders = Get-ChildItem -Path $extractRoot -Directory
+              foreach ($folder in Get-ChildItem -Path $srcRoot -Directory) {
+                  if ($deployMap.ContainsKey($folder.Name)) {
+                      $destFolder = Join-Path $destinationRoot $deployMap[$folder.Name]
+                      Write-Host "📂 Deploying $($folder.Name) → $destFolder"
 
-              foreach ($folder in $extractedFolders) {
-                  $dest = $null
-
-                  switch ($true) {
-                      # Backend only
-                      { $folder.Name -match "v10" } {
-                          if ($deployType -eq "frontend") { continue }
-                          $dest = Join-Path $destinationRoot "AG"
+                      if (-not (Test-Path $destFolder)) {
+                          New-Item -ItemType Directory -Path $destFolder -Force | Out-Null
                       }
 
-                      # Frontend files
-                      { $folder.Name -match "ag-app" } {
-                          if ($deployType -eq "backend") { continue }
-                          $dest = Join-Path $destinationRoot "AG"
-                      }
-                      { $folder.Name -match "crew" } {
-                          if ($deployType -eq "backend") { continue }
-                          $dest = Join-Path $destinationRoot "CREW"
-                      }
-                      { $folder.Name -match "e-invoice" } {
-                          if ($deployType -eq "backend") { continue }
-                          $dest = Join-Path $destinationRoot "EInvoice"
-                      }
-                      { $folder.Name -match "e-statement" } {
-                          if ($deployType -eq "backend") { continue }
-                          $dest = Join-Path $destinationRoot "EStatement"
-                      }
-                      { $folder.Name -match "e-proposal" } {
-                          if ($deployType -eq "backend") { continue }
-                          $dest = Join-Path $destinationRoot "EProposal"
-                      }
-
-                      default {
-                          Write-Host "⚠ Skipping unknown folder: $($folder.Name)"
-                          continue
-                      }
+                      Copy-Item "$($folder.FullName)\*" $destFolder -Recurse -Force
+                  } else {
+                      Write-Host "⚠ Skipping unknown folder: $($folder.Name)"
                   }
-
-                  $targets += @{ Source = "$($folder.FullName)\*" ; Destination = $dest }
-              }
-
-              # Deploy all targets
-              foreach ($target in $targets) {
-                  Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
-                  if (-not (Test-Path $target.Destination)) { New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null }
-                  Copy-Item "$($target.Source)" $target.Destination -Recurse -Force
               }
           }
 
