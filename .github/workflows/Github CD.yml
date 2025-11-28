@@ -71,6 +71,12 @@ jobs:
               $targets = @()
               $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
 
+              foreach ($domain in $domains) {
+              Write-Host "`n➡ Deploying to domain: $domain"
+
+              $targets = @()
+              $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
+
               foreach ($zip in $zipFiles) {
                   $temp = Join-Path $sourceFolder "extract_$((Get-Random))"
                   New-Item -ItemType Directory -Path $temp | Out-Null
