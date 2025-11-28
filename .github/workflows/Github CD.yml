@@ -24,131 +24,64 @@ jobs:
     runs-on: [self-hosted]
 
     steps:
-
       - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
-      - name: "📦 Prepare Merge Folder from ZIPs"
+      - name: "📦 Prepare Merge Folder"
         id: merge
         shell: pwsh
         run: |
           $root = "$PWD/deploy"
           if (Test-Path $root) { Remove-Item $root -Recurse -Force }
           New-Item -ItemType Directory -Path $root | Out-Null
+          echo "merged_root=$root" >> $env:GITHUB_OUTPUT
 
-          $merged = "$root/merged"
-          New-Item -ItemType Directory -Path $merged | Out-Null
-
-          $frontendMerged = "$merged/frontend"
-          $backendMerged  = "$merged/backend"
-          New-Item -ItemType Directory -Path $frontendMerged | Out-Null
-          New-Item -ItemType Directory -Path $backendMerged  | Out-Null
-
-          $frontendZip = "C:\deploy_test\frontend.zip"
-          $backendZip  = "C:\deploy_test\backend.zip"
-
-          if (Test-Path $frontendZip) {
-              Expand-Archive $frontendZip -DestinationPath $frontendMerged -Force
-          }
-          if (Test-Path $backendZip) {
-              Expand-Archive $backendZip -DestinationPath $backendMerged -Force
-          }
-
-          echo "merged_root=$merged" >> $env:GITHUB_OUTPUT
-
-
-      - name: "🚀 Deploy merged files using targets"
+      - name: "🚀 Deploy ZIPs to Local Destination"
         shell: pwsh
         run: |
-          $source="${{ steps.merge.outputs.merged_root }}"
-          $domains="${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
-          $type="${{ github.event.inputs.app_type }}"
-
-          function Detect-AppFolder($folderPath) {
-              $patterns = @{
-                "AG"          = "AG"
-                "Crew"        = "CREW"
-                "Invoice"     = "E-Invoice"
-                "Statement"   = "E-Statement"
-                "Proposal"    = "E-Proposal"
-              }
-
-              foreach ($p in $patterns.Keys) {
-                  if (Get-ChildItem -Path $folderPath -Recurse -Filter "*$p*" -ErrorAction SilentlyContinue) {
-                      return $patterns[$p]
-                  }
-              }
-
-              return "UNKNOWN"
-          }
+          $sourceFolder = "C:\deploy_test\source"
+          $destinationRoot = "C:\deploy_test\destination\httpdocs"
+          $domains = "${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
+          $deployType = "${{ github.event.inputs.app_type }}"
 
           foreach ($domain in $domains) {
+              Write-Host "`n➡ Deploying to domain: $domain"
 
-            Write-Host "`n➡ Deploying to $domain"
+              $targets = @()
+              $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
 
-            # Local test destination
-            $webroot = "C:\deploy_test\destination\httpdocs"
+              foreach ($zip in $zipFiles) {
+                  $temp = Join-Path $sourceFolder "extract_$((Get-Random))"
+                  New-Item -ItemType Directory -Path $temp | Out-Null
+                  Write-Host "🟩 Extracting $($zip.Name)"
+                  Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
 
-            $targets = @()
+                  # Determine target based on ZIP type
+                  switch ($true) {
+                      { $zip.Name -match "crew" }      { $dest = Join-Path $destinationRoot "CREW"; if ($deployType -eq "backend") { continue } }
+                      { $zip.Name -match "v10|ag-app"} { $dest = Join-Path $destinationRoot "AG"; if ($deployType -eq "frontend") { continue } }
+                      { $zip.Name -match "e-invoice" } { $dest = Join-Path $destinationRoot "EInvoice" }
+                      { $zip.Name -match "e-statement"} { $dest = Join-Path $destinationRoot "EStatement" }
+                      { $zip.Name -match "e-proposal"} { $dest = Join-Path $destinationRoot "EProposal" }
+                      default { Write-Host "⚠ Unknown ZIP type: $($zip.Name)"; Remove-Item $temp -Recurse -Force; continue }
+                  }
 
-            switch ($type) {
-
-              "frontend" {
-                $targets += @{
-                  Source = "$source\frontend"
-                  Logical = "frontend"
-                }
+                  # Add to deployment targets
+                  $targets += @{ Source = "$temp\*" ; Destination = $dest }
               }
 
-              "backend" {
-                $targets += @{
-                  Source = "$source\backend"
-                  Logical = "backend"
-                }
+              # Deploy all targets
+              foreach ($target in $targets) {
+                  Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
+                  if (-not (Test-Path $target.Destination)) { New-Item -ItemType Directory -Path $target.Destination | Out-Null }
+                  Copy-Item "$($target.Source)" $target.Destination -Recurse -Force
               }
 
-              "both" {
-                $targets += @{ Source = "$source\frontend"; Logical = "frontend" }
-                $targets += @{ Source = "$source\backend";  Logical = "backend"  }
-              }
-
-            }
-
-            foreach ($target in $targets) {
-
-              $top = Get-ChildItem -Path $target.Source -Directory
-
-              foreach ($folder in $top) {
-
-                $appName = Detect-AppFolder $folder.FullName
-
-                if ($appName -eq "UNKNOWN") {
-                  Write-Host "⚠ Skipped (No App Detected): $($folder.FullName)"
-                  continue
-                }
-
-                # AG frontend + AG backend both → AG folder
-                if ($appName -eq "AG" -or $appName -eq "CREW") {
-                  $dest = Join-Path $webroot "AG"
-                }
-                else {
-                  $dest = Join-Path $webroot $appName
-                }
-
-                if (!(Test-Path $dest)) {
-                  New-Item -ItemType Directory -Path $dest -Force | Out-Null
-                }
-
-                Write-Host "📁 Deploying $appName → $dest"
-                Remove-Item "$dest\*" -Recurse -Force -ErrorAction SilentlyContinue
-                Copy-Item "$($folder.FullName)\*" $dest -Recurse -Force
-              }
-
-            }
+              # Cleanup temp extraction folders
+              Get-ChildItem $sourceFolder -Filter "extract_*" -Directory | Remove-Item -Recurse -Force
           }
 
-
-      - name: "🧹 Cleanup"
+      - name: "🧹 Cleanup Deploy Folder"
         if: always()
         shell: pwsh
         run: |
