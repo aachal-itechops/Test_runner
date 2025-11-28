@@ -75,41 +75,60 @@ jobs:
       - name: "🚀 Deploy merged files"
         shell: pwsh
         run: |
-          $source="${{ steps.merge.outputs.merged_root }}"
-          $domains="${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
-          $type="${{ github.event.inputs.app_type }}"
+          $source  = "${{ steps.merge.outputs.merged_root }}"
+          $domains = "${{ github.event.inputs.domain }}"
+
+          if (-not $domains) {
+            $domains = @("local-test")
+          } else {
+            $domains = $domains.Split(",") | ForEach-Object { $_.Trim() }
+          }
+
+          $type = "${{ github.event.inputs.app_type }}"
 
           foreach ($domain in $domains) {
-            Write-Host "➡ Deploying to $domain"
+
+            Write-Host "➡ Deploying for: $domain"
 
             $targets = @()
 
             switch ($type) {
 
-            "frontend" {
-              $targets += @{
-              Source      = "$source\frontend"
-              Destination = "C:\deploy_test\destination\httpdocs\CREW"
-            }
+              "frontend" {
+                $targets += @{
+                  Source      = "$source\frontend"
+                  Destination = "C:\deploy_test\destination\httpdocs\CREW"
+                }
+              }
+
+              "backend" {
+                $targets += @{
+                  Source      = "$source\backend"
+                  Destination = "C:\deploy_test\destination\httpdocs\AG"
+                }
+              }
+
+              "both" {
+                $targets += @{
+                  Source      = "$source\frontend"
+                  Destination = "C:\deploy_test\destination\httpdocs\CREW"
+                }
+                $targets += @{
+                  Source      = "$source\backend"
+                  Destination = "C:\deploy_test\destination\httpdocs\AG"
+                }
+              }
             }
 
-          "backend" {
-            $targets += @{
-            Source      = "$source\backend"
-            Destination = "C:\deploy_test\destination\httpdocs\AG"
-          }
-          }
+            foreach ($target in $targets) {
+              Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
 
-          "both" {
-          $targets += @{
-          Source      = "$source\frontend"
-          Destination = "C:\deploy_test\destination\httpdocs\CREW"
-          }
-          $targets += @{
-          Source      = "$source\backend"
-          Destination = "C:\deploy_test\destination\httpdocs\AG"
-          }
-          }
+              if (-not (Test-Path $target.Destination)) {
+                New-Item -ItemType Directory -Path $target.Destination -Force | Out-Null
+              }
+
+              Copy-Item "$($target.Source)\*" $target.Destination -Recurse -Force
+            }
           }
 
       # ------------------------------------------
