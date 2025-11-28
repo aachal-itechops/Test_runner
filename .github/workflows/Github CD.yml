@@ -1,87 +1,97 @@
-name: "🚚 Manual Local Deploy Test"
+name: 🚚 Manual Deploy (Auto-Detect Apps)
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
+    inputs:
+      type:
+        description: "What do you want to deploy?"
+        required: true
+        type: choice
+        options:
+          - frontend
+          - backend
+          - both
+      domain:
+        description: "Which domain?"
+        required: true
+        type: choice
+        options:
+          - domain1.com
+          - domain2.com
+          - domain3.com
 
 jobs:
   deploy:
-    runs-on: [self-hosted]
+    runs-on: self-hosted
 
     steps:
-      - name: "📥 Checkout Repo"
-        uses: actions/checkout@v4
+      - name: 🟦 Set variables
+        run: |
+          $source = "C:\Users\BAPS\actions-runner-testrunner\_work\Test_runner\Test_runner\deploy\merged"
+          $deployType = "${{ github.event.inputs.type }}"
+          $domain = "${{ github.event.inputs.domain }}"
+          $webroot = "D:\inetpub\vhosts\$domain\httpdocs"
 
-      - name: "🚀 Content-Based Deploy from ZIPs"
+          Write-Host "Source = $source"
+          Write-Host "Deploy type = $deployType"
+          Write-Host "Domain = $domain"
+          Write-Host "Webroot = $webroot"
+
+      - name: 📦 Process ZIP Files (Auto-Detect App)
         shell: pwsh
         run: |
-          $sourceFolder = "C:\deploy_test\source"
-          $destRoot     = "C:\deploy_test\destination\httpdocs"
+          $source = "C:\Users\BAPS\actions-runner-testrunner\_work\Test_runner\Test_runner\deploy\merged"
+          $deployType = "${{ github.event.inputs.type }}"
+          $domain = "${{ github.event.inputs.domain }}"
+          $webroot = "D:\inetpub\vhosts\$domain\httpdocs"
 
-          # Destination folders (auto-create if missing)
-          $folders = @("AG","CREW","EInvoice","EProposal","EStatement")
-          foreach ($f in $folders) {
-              $path = Join-Path $destRoot $f
-              if (-not (Test-Path $path)) {
-                  New-Item -Path $path -ItemType Directory -Force | Out-Null
+          function Detect-AppName($folderPath) {
+              $names = @(
+                "AG", "Crew", "E-Statement", "E-Invoice", "E-Proposal"
+              )
+
+              foreach ($n in $names) {
+                if (Get-ChildItem -Path $folderPath -Recurse -Filter "*$n*" -ErrorAction SilentlyContinue) {
+                  return $n
+                }
               }
+
+              return "UNKNOWN"
           }
 
-          # Process every .zip file
-          $zipFiles = Get-ChildItem $sourceFolder -Filter "*.zip"
+          function Deploy-Folder($folder, $deployType) {
+              $appName = Detect-AppName $folder.FullName
+              if ($appName -eq "UNKNOWN") {
+                Write-Host "⚠ No matching app name detected for $($folder.Name)"
+                return
+              }
+
+              $dest = Join-Path $webroot $appName
+              if (!(Test-Path $dest)) { New-Item -ItemType Directory -Path $dest | Out-Null }
+
+              Write-Host "📁 Detected App: $appName"
+              Write-Host "➡ Copying to $dest"
+
+              Remove-Item "$dest\*" -Recurse -Force -ErrorAction SilentlyContinue
+              Copy-Item -Path "$($folder.FullName)\*" -Destination $dest -Recurse -Force
+          }
+
+          # Process only allowed types
+          $zipFiles = Get-ChildItem -Path $source -Filter *.zip
 
           foreach ($zip in $zipFiles) {
 
-              Write-Host "`n📦 Processing ZIP: $($zip.Name)"
+            $temp = Join-Path $source "extract_$((Get-Random))"
+            New-Item -ItemType Directory -Path $temp | Out-Null
 
-              # Create temp extraction folder
-              $temp = Join-Path $env:RUNNER_TEMP ("z_" + [guid]::NewGuid().ToString())
-              New-Item -Path $temp -ItemType Directory | Out-Null
+            Write-Host "🟩 Extracting $($zip.Name)"
+            Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
 
-              # Extract ZIP
-              Expand-Archive -Path $zip.FullName -DestinationPath $temp -Force
+            $topFolders = Get-ChildItem -Path $temp -Directory
 
-              # Scan extracted content
-              $allItems = Get-ChildItem -Path $temp -Recurse | Select-Object -ExpandProperty FullName
+            foreach ($folder in $topFolders) {
+              Deploy-Folder -folder $folder -deployType $deployType
+            }
 
-              # Determine destination by content
-              $destination = ""
-
-              if ($allItems -match "ag") {
-                  $destination = "AG"
-              }
-              elseif ($allItems -match "crew") {
-                  $destination = "CREW"
-              }
-              elseif ($allItems -match "e-?invoice") {
-                  $destination = "EInvoice"
-              }
-              elseif ($allItems -match "e-?proposal") {
-                  $destination = "EProposal"
-              }
-              elseif ($allItems -match "e-?statement") {
-                  $destination = "EStatement"
-              }
-              else {
-                  Write-Warning "⚠️ No matching keyword found in ZIP content. Skipping: $($zip.Name)"
-                  continue
-              }
-
-              $destPath = Join-Path $destRoot $destination
-              Write-Host "📂 Detected → $destination"
-              Write-Host "📥 Copying content to $destPath"
-
-              # Copy extracted files to destination
-              Copy-Item "$temp\*" $destPath -Recurse -Force
-
-              # Cleanup temp folder
-              Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item $temp -Recurse -Force
           }
-
-      - name: "🧹 Cleanup"
-        if: always()
-        shell: pwsh
-        run: |
-          Write-Host "Cleanup completed."
