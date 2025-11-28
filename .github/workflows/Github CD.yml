@@ -57,10 +57,10 @@ jobs:
     runs-on: [self-hosted]
     needs: extract
     steps:
-      - name: "🚀 Deploy Extracted Files"
+      - name: "🚀 Deploy ZIPs to Local Destination"
         shell: pwsh
         run: |
-          $sourceRoot = "${{ needs.extract.outputs.merged_root }}"
+          $sourceFolder = "${{ needs.extract.outputs.merged_root }}"
           $destinationRoot = "C:\deploy_test\destination\httpdocs"
           $domains = "${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
           $deployType = "${{ github.event.inputs.app_type }}"
@@ -68,23 +68,38 @@ jobs:
           foreach ($domain in $domains) {
               Write-Host "`n➡ Deploying to domain: $domain"
 
-              $folders = Get-ChildItem -Path $sourceRoot -Directory
+              $targets = @()
+              $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
 
-              foreach ($folder in $folders) {
-                  switch -Regex ($folder.Name) {
-                      "crew"        { $dest = Join-Path $destinationRoot "CREW"; if ($deployType -eq "backend") { continue } }
-                      "v10|ag-app"  { $dest = Join-Path $destinationRoot "AG"; if ($deployType -eq "frontend") { continue } }
-                      "e-invoice"   { $dest = Join-Path $destinationRoot "EInvoice" }
-                      "e-statement" { $dest = Join-Path $destinationRoot "EStatement" }
-                      "e-proposal"  { $dest = Join-Path $destinationRoot "EProposal" }
-                      default       { Write-Host "⚠ Unknown folder: $($folder.Name)"; continue }
+              foreach ($zip in $zipFiles) {
+                  $temp = Join-Path $sourceFolder "extract_$((Get-Random))"
+                  New-Item -ItemType Directory -Path $temp | Out-Null
+                  Write-Host "🟩 Extracting $($zip.Name)"
+                  Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
+
+                  # Determine target based on ZIP type
+                  switch ($true) {
+                      { $zip.Name -match "crew" }      { $dest = Join-Path $destinationRoot "CREW"; if ($deployType -eq "backend") { continue } }
+                      { $zip.Name -match "v10|ag-app"} { $dest = Join-Path $destinationRoot "AG"; if ($deployType -eq "frontend") { continue } }
+                      { $zip.Name -match "e-invoice" } { $dest = Join-Path $destinationRoot "EInvoice" }
+                      { $zip.Name -match "e-statement"} { $dest = Join-Path $destinationRoot "EStatement" }
+                      { $zip.Name -match "e-proposal"} { $dest = Join-Path $destinationRoot "EProposal" }
+                      default { Write-Host "⚠ Unknown ZIP type: $($zip.Name)"; Remove-Item $temp -Recurse -Force; continue }
                   }
 
-                  Write-Host "📂 Deploying $($folder.Name) → $dest"
-                  if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest | Out-Null }
-                  Remove-Item "$dest\*" -Recurse -Force -ErrorAction SilentlyContinue
-                  Copy-Item "$($folder.FullName)\*" $dest -Recurse -Force
+                  # Add to deployment targets
+                  $targets += @{ Source = "$temp\*" ; Destination = $dest }
               }
+
+              # Deploy all targets
+              foreach ($target in $targets) {
+                  Write-Host "📂 Deploying from $($target.Source) → $($target.Destination)"
+                  if (-not (Test-Path $target.Destination)) { New-Item -ItemType Directory -Path $target.Destination | Out-Null }
+                  Copy-Item "$($target.Source)" $target.Destination -Recurse -Force
+              }
+
+              # Cleanup temp extraction folders
+              Get-ChildItem $sourceFolder -Filter "extract_*" -Directory | Remove-Item -Recurse -Force
           }
 
       - name: "🧹 Cleanup Deploy Folder"
