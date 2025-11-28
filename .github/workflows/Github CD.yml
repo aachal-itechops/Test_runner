@@ -20,26 +20,60 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  extract:
+    name: "📦 Extract ZIPs"
     runs-on: [self-hosted]
 
     steps:
       - name: "📥 Checkout Repo"
         uses: actions/checkout@v4
 
-      - name: "📦 Prepare Deploy Folder"
-        id: merge
+      - name: "📦 Prepare Merge Folder"
         shell: pwsh
         run: |
-          $root = "$PWD/deploy"
+          $root = "$PWD/deploy/merged"
           if (Test-Path $root) { Remove-Item $root -Recurse -Force }
           New-Item -ItemType Directory -Path $root | Out-Null
-          echo "merged_root=$root" >> $env:GITHUB_OUTPUT
 
-      - name: "🚀 Deploy ZIPs to Local Destination"
+      - name: "🟩 Extract ZIPs"
         shell: pwsh
         run: |
           $sourceFolder = "C:\deploy_test\source"
+          $merged = "$PWD/deploy/merged"
+
+          $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
+          foreach ($zip in $zipFiles) {
+              $temp = Join-Path $merged "extract_$((Get-Random))"
+              New-Item -ItemType Directory -Path $temp | Out-Null
+              Write-Host "🟩 Extracting $($zip.Name)"
+              Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
+          }
+
+      - name: "📦 Upload Merged as Artifact"
+        uses: actions/upload-artifact@v3
+        with:
+          name: merged-folders
+          path: "$PWD/deploy/merged"
+
+  deploy:
+    name: "🚀 Deploy Extracted Files"
+    runs-on: [self-hosted]
+    needs: extract
+
+    steps:
+      - name: "📥 Checkout Repo"
+        uses: actions/checkout@v4
+
+      - name: "📦 Download Merged Artifact"
+        uses: actions/download-artifact@v3
+        with:
+          name: merged-folders
+          path: "$PWD/deploy/merged"
+
+      - name: "🚀 Deploy"
+        shell: pwsh
+        run: |
+          $merged = "$PWD/deploy/merged"
           $destinationRoot = "C:\deploy_test\destination\httpdocs"
           $domains = "${{ github.event.inputs.domain }}".Split(",") | ForEach-Object { $_.Trim() }
           $deployType = "${{ github.event.inputs.app_type }}"
@@ -47,45 +81,32 @@ jobs:
           foreach ($domain in $domains) {
               Write-Host "`n➡ Deploying to domain: $domain"
 
-              $zipFiles = Get-ChildItem -Path $sourceFolder -Filter *.zip*
               $targets = @()
+              $extractedFolders = Get-ChildItem -Path $merged -Directory
 
-              foreach ($zip in $zipFiles) {
-                  # Extract ZIP
-                  $temp = Join-Path $sourceFolder "extract_$((Get-Random))"
-                  New-Item -ItemType Directory -Path $temp | Out-Null
-                  Write-Host "🟩 Extracting $($zip.Name)"
-                  Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
+              foreach ($folder in $extractedFolders) {
+                  $dest = $null
 
-                  # Detect content-based deployment
-                  $subFolders = Get-ChildItem -Path $temp -Directory
-                  foreach ($folder in $subFolders) {
-                      $dest = $null
-
-                      # AG backend folder detection
-                      if (Get-ChildItem $folder.FullName -Recurse | Where-Object { $_.Name -match "ag-app|v10" }) {
-                          $dest = Join-Path $destinationRoot "AG"
-                          if ($deployType -eq "frontend") { continue }
-                      }
-                      # CREW frontend
-                      elseif ($folder.Name -match "crew") { 
-                          $dest = Join-Path $destinationRoot "CREW"
-                          if ($deployType -eq "backend") { continue }
-                      }
-                      # Other frontend apps
-                      elseif ($folder.Name -match "e-invoice") { $dest = Join-Path $destinationRoot "EInvoice" }
-                      elseif ($folder.Name -match "e-statement") { $dest = Join-Path $destinationRoot "EStatement" }
-                      elseif ($folder.Name -match "e-proposal") { $dest = Join-Path $destinationRoot "EProposal" }
-
-                      if ($dest) {
-                          $targets += @{ Source = "$($folder.FullName)\*" ; Destination = $dest }
-                      } else {
-                          Write-Host "⚠ Skipping unknown folder: $($folder.Name)"
-                      }
+                  # AG backend detection
+                  if (Get-ChildItem $folder.FullName -Recurse | Where-Object { $_.Name -match "ag-app|v10" }) {
+                      $dest = Join-Path $destinationRoot "AG"
+                      if ($deployType -eq "frontend") { continue }
                   }
+                  # CREW frontend
+                  elseif ($folder.Name -match "crew") { 
+                      $dest = Join-Path $destinationRoot "CREW"
+                      if ($deployType -eq "backend") { continue }
+                  }
+                  # Other frontend apps
+                  elseif ($folder.Name -match "e-invoice") { $dest = Join-Path $destinationRoot "EInvoice" }
+                  elseif ($folder.Name -match "e-statement") { $dest = Join-Path $destinationRoot "EStatement" }
+                  elseif ($folder.Name -match "e-proposal") { $dest = Join-Path $destinationRoot "EProposal" }
 
-                  # Cleanup extracted temp folder
-                  Remove-Item $temp -Recurse -Force
+                  if ($dest) {
+                      $targets += @{ Source = "$($folder.FullName)\*" ; Destination = $dest }
+                  } else {
+                      Write-Host "⚠ Skipping unknown folder: $($folder.Name)"
+                  }
               }
 
               # Deploy all targets
